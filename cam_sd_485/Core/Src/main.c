@@ -23,6 +23,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 /* que funcione plox, tengo que chambeaaarr xdxd
+ * cambio en la computadora
+ *
+ */
 
 /* USER CODE END Includes */
 
