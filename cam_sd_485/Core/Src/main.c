@@ -59,6 +59,25 @@ PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
 
+#define PREAMBLE0 0x55
+#define PREAMBLE1 0xAA
+static uint8_t uartRxBuf[4096];      // DMA ring
+static uint32_t fileCounter = 1;     // IMG_000001.JPG …
+
+/* State machine */
+typedef enum { ST_IDLE, ST_PREAMBLE2, ST_LEN, ST_DATA } rx_state_t;
+static rx_state_t rxState = ST_IDLE;
+static uint32_t expectedLen = 0;
+static uint32_t received   = 0;
+static FIL       rxFile;
+static uint16_t  crcRunning = 0;
+
+static uint8_t lenIdx = 0;
+
+/* Forward */
+static void processStream(uint8_t *data, uint32_t len);
+
+
 void myprintf(const char *fmt, ...);
 
 /* USER CODE END PV */
@@ -167,6 +186,12 @@ int main(void)
 
   myprintf("SD card stats:\r\n%10lu KiB total drive space.\r\n%10lu KiB available.\r\n", total_sectors / 2, free_sectors / 2);
   HAL_Delay(1000);
+
+  HAL_UARTEx_ReceiveToIdle_DMA(&huart7, uartRxBuf, sizeof(uartRxBuf));
+  __HAL_DMA_DISABLE_IT(huart7.hdmarx, DMA_IT_HT);   // we only need TC & IDLE
+  myprintf("Ready – waiting for 0x55 0xAA …\r\n");
+
+
 
   /* USER CODE END 2 */
 
@@ -313,7 +338,7 @@ static void MX_UART7_Init(void)
   huart7.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart7.Init.ClockPrescaler = UART_PRESCALER_DIV1;
   huart7.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_RS485Ex_Init(&huart7, UART_DE_POLARITY_HIGH, 0, 0) != HAL_OK)
+  if (HAL_UART_Init(&huart7) != HAL_OK)
   {
     Error_Handler();
   }
@@ -567,6 +592,87 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart,
+                                uint16_t Size)         /* called on IDLE */
+{
+  if (huart != &huart7) return;
+  processStream(uartRxBuf, Size);
+  /* restart DMA right away */
+  HAL_UARTEx_ReceiveToIdle_DMA(&huart7, uartRxBuf, sizeof(uartRxBuf));
+  __HAL_DMA_DISABLE_IT(huart7.hdmarx, DMA_IT_HT);
+}
+
+/* Tiny helper that may be called repeatedly with arbitrary chunk sizes */
+static void processStream(uint8_t *data, uint32_t len)
+{
+  while (len--)
+  {
+    uint8_t b = *data++;
+
+    switch (rxState)
+    {
+    /* ----------- wait for 0x55 0xAA ----------- */
+    case ST_IDLE:
+        if (b == PREAMBLE0) rxState = ST_PREAMBLE2;
+        break;
+
+    case ST_PREAMBLE2:
+        if (b == PREAMBLE1) {
+            expectedLen = received = lenIdx = 0;
+            rxState = ST_LEN;
+        } else {
+            rxState = ST_IDLE;               // false alarm
+        }
+        break;
+
+    case ST_LEN:
+      expectedLen |= ((uint32_t)b) << (8*lenIdx++);
+      if (lenIdx == 4)             /* got complete length */
+      {
+        lenIdx = 0;
+
+        /* open new file */
+        char name[32];
+        sprintf(name, "IMG_%06lu.JPG", fileCounter++);
+        if (f_open(&rxFile, name, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK)
+        { myprintf("open %s failed\r\n", name); rxState = ST_IDLE; break; }
+
+        myprintf("Receiving %s (%lu bytes)\r\n", name, expectedLen);
+        crcRunning = 0xFFFF;       /* init CRC if you keep it */
+        rxState    = ST_DATA;
+      }
+      break;
+
+    case ST_DATA:
+    {
+      uint8_t buf[256];
+      buf[0] = b;                  /* put first byte */
+      uint32_t chunk = 1;
+
+      /* scoop as many as possible from this DMA segment */
+      while (chunk < sizeof(buf) && len) { buf[chunk++] = *data++; len--; }
+
+      /* write */
+      UINT bw;
+      f_write(&rxFile, buf, chunk, &bw);
+      received += chunk;
+      //crcRunning = CRC16_X25(buf, chunk, crcRunning);  // user-supplied func
+
+      /* finished? */
+      if (received >= expectedLen)
+      {
+        f_close(&rxFile);
+        myprintf("Done (%lu bytes)\r\n", received);
+        rxState = ST_IDLE;
+      }
+    } break;
+    } /* switch */
+  }   /* while len */
+}
+
+
+
 
 /* USER CODE END 4 */
 

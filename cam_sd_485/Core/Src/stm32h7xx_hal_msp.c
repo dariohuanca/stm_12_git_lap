@@ -195,10 +195,9 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
     __HAL_RCC_GPIOE_CLK_ENABLE();
     /**UART7 GPIO Configuration
     PF7     ------> UART7_TX
-    PF8     ------> UART7_DE
     PE7     ------> UART7_RX
     */
-    GPIO_InitStruct.Pin = GPIO_PIN_7|GPIO_PIN_8;
+    GPIO_InitStruct.Pin = GPIO_PIN_7;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -313,10 +312,9 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* huart)
 
     /**UART7 GPIO Configuration
     PF7     ------> UART7_TX
-    PF8     ------> UART7_DE
     PE7     ------> UART7_RX
     */
-    HAL_GPIO_DeInit(GPIOF, GPIO_PIN_7|GPIO_PIN_8);
+    HAL_GPIO_DeInit(GPIOF, GPIO_PIN_7);
 
     HAL_GPIO_DeInit(GPIOE, GPIO_PIN_7);
 
