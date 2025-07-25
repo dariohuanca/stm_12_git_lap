@@ -54,10 +54,13 @@ SPI_HandleTypeDef hspi1;
 UART_HandleTypeDef huart7;
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart3;
+DMA_HandleTypeDef hdma_uart7_rx;
 
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
+
+
 
 #define PREAMBLE0 0x55
 #define PREAMBLE1 0xAA
@@ -69,27 +72,37 @@ typedef enum { ST_IDLE, ST_PREAMBLE2, ST_LEN, ST_DATA } rx_state_t;
 static rx_state_t rxState = ST_IDLE;
 static uint32_t expectedLen = 0;
 static uint32_t received   = 0;
-static FIL       rxFile;
-static uint16_t  crcRunning = 0;
+//static FIL       rxFile;
+//static uint16_t  crcRunning = 0;
 
 static uint8_t lenIdx = 0;
 
 /* Forward */
 static void processStream(uint8_t *data, uint32_t len);
+static void parserFeed(uint8_t b) ;
 
 
 void myprintf(const char *fmt, ...);
+
+#define RING_SIZE 8192u                  /* 8 kB – plenty for 115 200 Bd   */
+#define RING_MASK (RING_SIZE - 1)        /* works because size is power-of-2 */
+
+static uint8_t  ring[RING_SIZE];
+static volatile uint32_t wrIdx = 0;      /* written ONLY in ISR            */
+static          uint32_t rdIdx = 0;      /* used ONLY in main-loop         */
+
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_USART3_UART_Init(void);
-static void MX_USB_OTG_FS_PCD_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_UART7_Init(void);
+static void MX_USART3_UART_Init(void);
+static void MX_USB_OTG_FS_PCD_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -145,11 +158,12 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_USART3_UART_Init();
-  MX_USB_OTG_FS_PCD_Init();
+  MX_DMA_Init();
   MX_USART2_UART_Init();
   MX_SPI1_Init();
   MX_UART7_Init();
+  MX_USART3_UART_Init();
+  MX_USB_OTG_FS_PCD_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
   myprintf("\r\n~ SD card demo by kiwih ~\r\n\r\n");
@@ -187,9 +201,21 @@ int main(void)
   myprintf("SD card stats:\r\n%10lu KiB total drive space.\r\n%10lu KiB available.\r\n", total_sectors / 2, free_sectors / 2);
   HAL_Delay(1000);
 
+  HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin | LD3_Pin, GPIO_PIN_SET);   // PB0 + PB14
+  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_SET);   // PE1
+
+  uint32_t t0 = HAL_GetTick();          /* non-blocking delay loop */
+  while (HAL_GetTick() - t0 < 2000U) __NOP();
+
+  HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin | LD3_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_RESET);
+
   HAL_UARTEx_ReceiveToIdle_DMA(&huart7, uartRxBuf, sizeof(uartRxBuf));
   __HAL_DMA_DISABLE_IT(huart7.hdmarx, DMA_IT_HT);   // we only need TC & IDLE
   myprintf("Ready – waiting for 0x55 0xAA …\r\n");
+
+
+
 
 
 
@@ -202,6 +228,15 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	while (rdIdx != wrIdx) {
+		uint8_t b = ring[rdIdx & RING_MASK];
+		rdIdx++;
+		parserFeed(b);                   /*  ← your unchanged state machine */
+	}
+
+
+
+
   }
   /* USER CODE END 3 */
 }
@@ -493,6 +528,22 @@ static void MX_USB_OTG_FS_PCD_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream0_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -593,84 +644,107 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart,
-                                uint16_t Size)         /* called on IDLE */
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *hu, uint16_t Size)
 {
-  if (huart != &huart7) return;
-  processStream(uartRxBuf, Size);
-  /* restart DMA right away */
-  HAL_UARTEx_ReceiveToIdle_DMA(&huart7, uartRxBuf, sizeof(uartRxBuf));
-  __HAL_DMA_DISABLE_IT(huart7.hdmarx, DMA_IT_HT);
+    if (hu != &huart7) return;
+
+    uint8_t *src = uartRxBuf;
+    uint32_t w   = wrIdx;                /* local shadow */
+
+    while (Size--) {
+        ring[w & RING_MASK] = *src++;
+        w++;
+    }
+    wrIdx = w;                           /* publish new write index        */
+
+    HAL_UARTEx_ReceiveToIdle_DMA(&huart7, uartRxBuf, sizeof(uartRxBuf));
+    __HAL_DMA_DISABLE_IT(huart7.hdmarx, DMA_IT_HT);   /* keep ISR minimal  */
 }
 
 /* Tiny helper that may be called repeatedly with arbitrary chunk sizes */
-static void processStream(uint8_t *data, uint32_t len)
-{
-  while (len--)
-  {
-    uint8_t b = *data++;
+extern FATFS   FatFs;     // mounted once in main()
+static FIL     fil;       // single global file handle
 
-    switch (rxState)
+
+static void parserFeed(uint8_t b)
+{
+    static rx_state_t st    = ST_IDLE;
+    static uint32_t   expL  = 0, rxCnt = 0;
+    static uint8_t    lenIdx = 0;
+
+    switch (st)
     {
-    /* ----------- wait for 0x55 0xAA ----------- */
+    /* --------------- pre-amble hunt ---------------- */
     case ST_IDLE:
-        if (b == PREAMBLE0) rxState = ST_PREAMBLE2;
+        if (b == PREAMBLE0) st = ST_PREAMBLE2;
         break;
 
     case ST_PREAMBLE2:
-        if (b == PREAMBLE1) {
-            expectedLen = received = lenIdx = 0;
-            rxState = ST_LEN;
-        } else {
-            rxState = ST_IDLE;               // false alarm
+        if (b == PREAMBLE1) { expL = rxCnt = lenIdx = 0; st = ST_LEN; }
+        else                st = ST_IDLE;
+        break;
+
+    /* --------------- length assembly --------------- */
+    case ST_LEN:
+        expL |= (uint32_t)b << (8 * lenIdx++);
+        if (lenIdx == 4) {
+            char name[32];
+            sprintf(name, "IMG_%06lu.JPG", fileCounter++);
+            if (f_open(&fil, name, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) {
+                myprintf("open %s fail\r\n", name);
+                st = ST_IDLE;
+            } else {
+                myprintf("Receiving %s (%lu bytes)\r\n", name, expL);
+                st = ST_DATA;
+            }
         }
         break;
 
-    case ST_LEN:
-      expectedLen |= ((uint32_t)b) << (8*lenIdx++);
-      if (lenIdx == 4)             /* got complete length */
-      {
-        lenIdx = 0;
-
-        /* open new file */
-        char name[32];
-        sprintf(name, "IMG_%06lu.JPG", fileCounter++);
-        if (f_open(&rxFile, name, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK)
-        { myprintf("open %s failed\r\n", name); rxState = ST_IDLE; break; }
-
-        myprintf("Receiving %s (%lu bytes)\r\n", name, expectedLen);
-        crcRunning = 0xFFFF;       /* init CRC if you keep it */
-        rxState    = ST_DATA;
-      }
-      break;
+    /* --------------- data stream ------------------- */
 
     case ST_DATA:
-    {
-      uint8_t buf[256];
-      buf[0] = b;                  /* put first byte */
-      uint32_t chunk = 1;
+        {
+            /*   1. write byte to SD   */
+        	//myprintf("Entro a estado ST_DATA\r\n");
+			HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin | LD3_Pin, GPIO_PIN_SET);   // PB0 + PB14
+			HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_SET);   // PE1
 
-      /* scoop as many as possible from this DMA segment */
-      while (chunk < sizeof(buf) && len) { buf[chunk++] = *data++; len--; }
+			uint32_t t0 = HAL_GetTick();          /* non-blocking delay loop */
+			while (HAL_GetTick() - t0 < 200U) __NOP();
 
-      /* write */
-      UINT bw;
-      f_write(&rxFile, buf, chunk, &bw);
-      received += chunk;
-      //crcRunning = CRC16_X25(buf, chunk, crcRunning);  // user-supplied func
+			HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin | LD3_Pin, GPIO_PIN_RESET);
+			HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_RESET);
+            UINT bw;
+            if (f_write(&fil, &b, 1, &bw) != FR_OK || bw != 1) {
+                myprintf("write err\r\n");
+                f_close(&fil);
+                st = ST_IDLE;
+                break;
+            }
 
-      /* finished? */
-      if (received >= expectedLen)
-      {
-        f_close(&rxFile);
-        myprintf("Done (%lu bytes)\r\n", received);
-        rxState = ST_IDLE;
-      }
-    } break;
-    } /* switch */
-  }   /* while len */
+            /*   2. blink LD1 each byte   */
+            //HAL_GPIO_TogglePin(LED1_PORT, LED1_PIN);
+
+            /*   3. done?   */
+            if (++rxCnt >= expL) {
+                f_close(&fil);
+
+                /* Turn ALL LEDs on for 2 s */
+                HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin | LD3_Pin, GPIO_PIN_SET);   // PB0 + PB14
+                HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_SET);   // PE1
+
+                uint32_t t0 = HAL_GetTick();          /* non-blocking delay loop */
+                while (HAL_GetTick() - t0 < 2000U) __NOP();
+
+                HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin | LD3_Pin, GPIO_PIN_RESET);
+                HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_RESET);
+                myprintf("Done (%lu bytes)\r\n", rxCnt);
+                st = ST_IDLE;
+            }
+        }
+        break;
+    }
 }
-
 
 
 
