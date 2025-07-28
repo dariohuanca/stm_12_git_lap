@@ -60,6 +60,9 @@ PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
 
+/* ---------- intentos.txt helpers ---------------------------------- */
+static const char *ATTEMPT_FILE = "intentos.txt";
+static uint32_t    imgNumber    = 0;          /* number for current image */
 
 
 #define PREAMBLE0 0x55
@@ -127,6 +130,41 @@ uint8_t rxBuf[256];
 uint32_t jpegLen = 0;
 UINT bytesWritten;
 FRESULT fres;
+
+FATFS   FatFs;     /* FatFs handle      */
+FIL     fil;       /* File handle (reuse for both .JPG and intentos.txt) */
+FRESULT fres;
+
+static uint32_t get_last_attempt(void)
+{
+    uint32_t last = 0;
+
+    fres = f_open(&fil, ATTEMPT_FILE, FA_READ);
+    if (fres == FR_OK) {
+        char line[32];
+        while (f_gets(line, sizeof line, &fil)) {
+            uint32_t n;
+            if (sscanf(line, "%lu", &n) == 1) last = n;
+        }
+        f_close(&fil);
+    }   /* else: file not found – treat as zero  */
+
+    return last;
+}
+
+/* --- append a number to intentos.txt ----------------------------------- */
+static void log_attempt(uint32_t num)
+{
+    fres = f_open(&fil, ATTEMPT_FILE, FA_OPEN_APPEND | FA_WRITE);
+    if (fres == FR_OK) {
+        char line[16];
+        UINT bw;
+        int len = sprintf(line, "%lu\r\n", num);
+        f_write(&fil, line, len, &bw);
+        f_close(&fil);
+    }
+}
+
 
 /* USER CODE END 0 */
 
@@ -209,6 +247,21 @@ int main(void)
 
   HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin | LD3_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_RESET);
+
+
+  imgNumber = get_last_attempt() + 1;           /* e.g. 42 → 43          */
+  char name[32];
+  sprintf(name, "IMG_%06lu.JPG", imgNumber);    /* IMG_000043.JPG        */
+  log_attempt(imgNumber);
+
+  HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin | LD3_Pin, GPIO_PIN_SET);   // PB0 + PB14
+  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_SET);   // PE1
+
+  while (HAL_GetTick() - t0 < 2000U) __NOP();
+
+  HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin | LD3_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_RESET);
+
 
   HAL_UARTEx_ReceiveToIdle_DMA(&huart7, uartRxBuf, sizeof(uartRxBuf));
   __HAL_DMA_DISABLE_IT(huart7.hdmarx, DMA_IT_HT);   // we only need TC & IDLE
@@ -663,7 +716,6 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *hu, uint16_t Size)
 
 /* Tiny helper that may be called repeatedly with arbitrary chunk sizes */
 extern FATFS   FatFs;     // mounted once in main()
-static FIL     fil;       // single global file handle
 
 
 static void parserFeed(uint8_t b)
