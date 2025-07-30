@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdbool.h>
 
 /* USER CODE END Includes */
 
@@ -65,23 +66,32 @@ static const char *ATTEMPT_FILE = "intentos.txt";
 static uint32_t    imgNumber    = 0;          /* number for current image */
 
 
-#define PREAMBLE0 0x55
-#define PREAMBLE1 0xAA
-static uint8_t uartRxBuf[4096];      // DMA ring
-static uint32_t fileCounter = 1;     // IMG_000001.JPG …
 
-/* State machine */
-typedef enum { ST_IDLE, ST_PREAMBLE2, ST_LEN, ST_DATA } rx_state_t;
-static rx_state_t rxState = ST_IDLE;
-static uint32_t expectedLen = 0;
-static uint32_t received   = 0;
+static uint8_t uartRxBuf[4096];      // DMA ring
+
+
+
+#define PREAMBLE0   0x55
+#define PREAMBLE1   0xAA
+#define MAX_FRAME   70000U           /* max JPEG you expect (66 kB + margin) */
+
+/* ------------ big receive buffer -------------- */
+/* In AXI-SRAM so DMA and CPU can both access it */
+static uint8_t  frameBuf[MAX_FRAME] __attribute__((section(".RAM_D1")));
+static uint32_t frameIdx   = 0;      /* how many payload bytes stored */
+static uint32_t frameExp   = 0;      /* expected length from header   */
+static volatile bool frameReady = false;
+
+/* ------------ tiny RX state machine ----------- */
+typedef enum { RX_IDLE, RX_P1, RX_LEN, RX_PAYLOAD } rx_state_t;
+static rx_state_t rxSt = RX_IDLE;
+static uint8_t lenIdx  = 0;
+
 //static FIL       rxFile;
 //static uint16_t  crcRunning = 0;
 
-static uint8_t lenIdx = 0;
 
-/* Forward */
-static void processStream(uint8_t *data, uint32_t len);
+
 static void parserFeed(uint8_t b) ;
 
 
@@ -159,10 +169,60 @@ static void log_attempt(uint32_t num)
     if (fres == FR_OK) {
         char line[16];
         UINT bw;
-        int len = sprintf(line, "%lu\r\n", num);
+        int len = sprintf(line, "\r\n\r\n%lu\r\n", num);
+        myprintf(line, "\r\n\r\n%lu\r\n", num);
         f_write(&fil, line, len, &bw);
         f_close(&fil);
     }
+}
+
+
+
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *hu, uint16_t Size)
+{
+    if (hu != &huart7) return;               /* only UART7 */
+
+    uint8_t *src = uartRxBuf;
+
+    while (Size--) {
+        uint8_t b = *src++;
+
+        switch (rxSt) {
+
+        case RX_IDLE:                        /* hunt 0x55 */
+            if (b == PREAMBLE0) rxSt = RX_P1;
+            break;
+
+        case RX_P1:                          /* hunt 0xAA */
+            rxSt = (b == PREAMBLE1) ? RX_LEN : RX_IDLE;
+            lenIdx = 0;  frameExp = 0;
+            break;
+
+        case RX_LEN:                         /* collect 4-byte length */
+            frameExp |= (uint32_t)b << (8 * lenIdx++);
+            if (lenIdx == 4) {
+                if (frameExp > MAX_FRAME) {      /* too big → abort */
+                    rxSt = RX_IDLE;
+                } else {
+                    frameIdx = 0;
+                    rxSt = RX_PAYLOAD;
+                }
+            }
+            break;
+
+        case RX_PAYLOAD:                     /* copy into big buffer */
+            frameBuf[frameIdx++] = b;
+            if (frameIdx >= frameExp) {      /* frame complete */
+                frameReady = true;           /* signal main loop */
+                rxSt = RX_IDLE;
+            }
+            break;
+        }
+    }
+
+    /* restart DMA */
+    HAL_UARTEx_ReceiveToIdle_DMA(&huart7, uartRxBuf, sizeof(uartRxBuf));
+    __HAL_DMA_DISABLE_IT(huart7.hdmarx, DMA_IT_HT);
 }
 
 
@@ -200,6 +260,8 @@ int main(void)
   MX_USART2_UART_Init();
   MX_SPI1_Init();
   MX_UART7_Init();
+  HAL_UARTEx_ReceiveToIdle_DMA(&huart7, uartRxBuf,  sizeof(uartRxBuf));
+  __HAL_DMA_DISABLE_IT(huart7.hdmarx, DMA_IT_HT);
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
   MX_FATFS_Init();
@@ -249,10 +311,7 @@ int main(void)
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_RESET);
 
 
-  imgNumber = get_last_attempt() + 1;           /* e.g. 42 → 43          */
-  char name[32];
-  sprintf(name, "IMG_%06lu.JPG", imgNumber);    /* IMG_000043.JPG        */
-  log_attempt(imgNumber);
+
 
   HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin | LD3_Pin, GPIO_PIN_SET);   // PB0 + PB14
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_SET);   // PE1
@@ -281,11 +340,31 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	while (rdIdx != wrIdx) {
-		uint8_t b = ring[rdIdx & RING_MASK];
-		rdIdx++;
-		parserFeed(b);                   /*  ← your unchanged state machine */
-	}
+	  if (frameReady) {
+	         frameReady = false;                  /* consume the flag */
+
+	         /* ----- build filename IMG_XXXXXX.JPG (you can add intentos.txt logic) */
+	         static uint32_t imgNum = 1;
+	         char name[32];
+	         sprintf(name, "IMG_%06lu.JPG", imgNum++);
+
+	         UINT bw;
+	         fres = f_open(&fil, name, FA_WRITE | FA_CREATE_ALWAYS);
+	         if (fres == FR_OK) {
+	             fres = f_write(&fil, frameBuf, frameExp, &bw);
+	             f_close(&fil);
+	             myprintf("Stored %s (%lu bytes, wrote %u)\r\n", name, frameExp, bw);
+	         } else {
+	             myprintf("f_open %s fail (%u)\r\n", name, fres);
+	         }
+
+	         /* optional LED-show */
+	         HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin|LD3_Pin, GPIO_PIN_SET);
+	         HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+	         HAL_Delay(2000);
+	         HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin|LD3_Pin, GPIO_PIN_RESET);
+	         HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+	     }
 
 
 
@@ -697,106 +776,7 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *hu, uint16_t Size)
-{
-    if (hu != &huart7) return;
 
-    uint8_t *src = uartRxBuf;
-    uint32_t w   = wrIdx;                /* local shadow */
-
-    while (Size--) {
-        ring[w & RING_MASK] = *src++;
-        w++;
-    }
-    wrIdx = w;                           /* publish new write index        */
-
-    HAL_UARTEx_ReceiveToIdle_DMA(&huart7, uartRxBuf, sizeof(uartRxBuf));
-    __HAL_DMA_DISABLE_IT(huart7.hdmarx, DMA_IT_HT);   /* keep ISR minimal  */
-}
-
-/* Tiny helper that may be called repeatedly with arbitrary chunk sizes */
-extern FATFS   FatFs;     // mounted once in main()
-
-
-static void parserFeed(uint8_t b)
-{
-    static rx_state_t st    = ST_IDLE;
-    static uint32_t   expL  = 0, rxCnt = 0;
-    static uint8_t    lenIdx = 0;
-
-    switch (st)
-    {
-    /* --------------- pre-amble hunt ---------------- */
-    case ST_IDLE:
-        if (b == PREAMBLE0) st = ST_PREAMBLE2;
-        break;
-
-    case ST_PREAMBLE2:
-        if (b == PREAMBLE1) { expL = rxCnt = lenIdx = 0; st = ST_LEN; }
-        else                st = ST_IDLE;
-        break;
-
-    /* --------------- length assembly --------------- */
-    case ST_LEN:
-        expL |= (uint32_t)b << (8 * lenIdx++);
-        if (lenIdx == 4) {
-            char name[32];
-            sprintf(name, "IMG_%06lu.JPG", fileCounter++);
-            if (f_open(&fil, name, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) {
-                myprintf("open %s fail\r\n", name);
-                st = ST_IDLE;
-            } else {
-                myprintf("Receiving %s (%lu bytes)\r\n", name, expL);
-                st = ST_DATA;
-            }
-        }
-        break;
-
-    /* --------------- data stream ------------------- */
-
-    case ST_DATA:
-        {
-            /*   1. write byte to SD   */
-        	//myprintf("Entro a estado ST_DATA\r\n");
-			HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin | LD3_Pin, GPIO_PIN_SET);   // PB0 + PB14
-			HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_SET);   // PE1
-
-			uint32_t t0 = HAL_GetTick();          /* non-blocking delay loop */
-			while (HAL_GetTick() - t0 < 200U) __NOP();
-
-			HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin | LD3_Pin, GPIO_PIN_RESET);
-			HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_RESET);
-            UINT bw;
-            if (f_write(&fil, &b, 1, &bw) != FR_OK || bw != 1) {
-                myprintf("write err\r\n");
-                f_close(&fil);
-                st = ST_IDLE;
-                break;
-            }
-
-            /*   2. blink LD1 each byte   */
-            //HAL_GPIO_TogglePin(LED1_PORT, LED1_PIN);
-
-            /*   3. done?   */
-            if (++rxCnt >= expL) {
-                f_close(&fil);
-
-                /* Turn ALL LEDs on for 2 s */
-                HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin | LD3_Pin, GPIO_PIN_SET);   // PB0 + PB14
-                HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_SET);   // PE1
-
-                uint32_t t0 = HAL_GetTick();          /* non-blocking delay loop */
-                while (HAL_GetTick() - t0 < 2000U) __NOP();
-
-                HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin | LD3_Pin, GPIO_PIN_RESET);
-                HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_RESET);
-                myprintf("Done (%lu bytes)\r\n", rxCnt);
-                st = ST_IDLE;
-            }
-        }
-        break;
-    }
-}
 
 
 
