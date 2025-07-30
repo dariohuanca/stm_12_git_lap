@@ -69,6 +69,12 @@ static uint32_t    imgNumber    = 0;          /* number for current image */
 
 static uint8_t uartRxBuf[4096];      // DMA ring
 
+#define CHUNK_SIZE   2048U           /* bytes per page that sender transmits */
+#define MAX_FRAME    70000U          /* keep your old limit */
+
+static uint32_t pageIdx   = 0;       /* bytes copied in *current* page       */
+static volatile bool ackPending = false;   /* main loop sends ACK when true   */
+
 
 
 #define PREAMBLE0   0x55
@@ -210,10 +216,20 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *hu, uint16_t Size)
             }
             break;
 
-        case RX_PAYLOAD:                     /* copy into big buffer */
-            frameBuf[frameIdx++] = b;
-            if (frameIdx >= frameExp) {      /* frame complete */
-                frameReady = true;           /* signal main loop */
+        case RX_PAYLOAD:
+            frameBuf[frameIdx++] = b;         /* copy byte to big buffer */
+            pageIdx++;                        /* step within current page */
+
+            /* ---- if page complete OR frame complete ---------------- */
+            if (pageIdx == CHUNK_SIZE || frameIdx == frameExp)
+            {
+                pageIdx = 0;                  /* start next page        */
+                ackPending = true;            /* signal main loop       */
+            }
+
+            /* ---- if frame fully received --------------------------- */
+            if (frameIdx >= frameExp) {
+                frameReady = true;            /* whole JPEG in RAM      */
                 rxSt = RX_IDLE;
             }
             break;
@@ -340,31 +356,46 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  if (frameReady) {
-	         frameReady = false;                  /* consume the flag */
+	    /* ---------- 1. Send ACK for each 2 048-byte page ---------- */
+	    if (ackPending) {
+	        uint8_t ack = 0x55;
+	        HAL_UART_Transmit(&huart7, &ack, 1, HAL_MAX_DELAY);
+	        ackPending = false;
+	    }
 
-	         /* ----- build filename IMG_XXXXXX.JPG (you can add intentos.txt logic) */
-	         static uint32_t imgNum = 1;
-	         char name[32];
-	         sprintf(name, "IMG_%06lu.JPG", imgNum++);
+	    /* ---------- 2. Whole frame arrived ? ---------------------- */
+	    if (frameReady) {
+	        frameReady = false;                 /* consume flag */
 
-	         UINT bw;
-	         fres = f_open(&fil, name, FA_WRITE | FA_CREATE_ALWAYS);
-	         if (fres == FR_OK) {
-	             fres = f_write(&fil, frameBuf, frameExp, &bw);
-	             f_close(&fil);
-	             myprintf("Stored %s (%lu bytes, wrote %u)\r\n", name, frameExp, bw);
-	         } else {
-	             myprintf("f_open %s fail (%u)\r\n", name, fres);
-	         }
+	        /* ---- a. pick next image number from intentos.txt ---- */
+	        uint32_t imgNum = get_last_attempt() + 1;       /* e.g. 42 → 43 */
+	        char name[32];
+	        sprintf(name, "IMG_%06lu.JPG", imgNum);         /* IMG_000043.JPG */
 
-	         /* optional LED-show */
-	         HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin|LD3_Pin, GPIO_PIN_SET);
-	         HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
-	         HAL_Delay(2000);
-	         HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin|LD3_Pin, GPIO_PIN_RESET);
-	         HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
-	     }
+	        /* ---- b. write entire JPEG to SD in one call --------- */
+	        fres = f_open(&fil, name, FA_WRITE | FA_CREATE_ALWAYS);
+	        if (fres == FR_OK) {
+	            UINT bw;
+	            fres = f_write(&fil, frameBuf, frameExp, &bw);
+	            f_close(&fil);
+
+	            if (fres == FR_OK && bw == frameExp) {
+	                log_attempt(imgNum);                     /* add 43 to intentos.txt */
+	                myprintf("Stored %s (%lu bytes)\r\n", name, frameExp);
+	            } else {
+	                myprintf("Write err %u (bw=%u)\r\n", fres, bw);
+	            }
+	        } else {
+	            myprintf("Open %s fail (%u)\r\n", name, fres);
+	        }
+
+	        /* ---- c. 2-second LED light-show --------------------- */
+	        HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin|LD3_Pin, GPIO_PIN_SET); /* PB0+PB14 */
+	        HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_SET); /* PE1      */
+	        HAL_Delay(2000);
+	        HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin|LD3_Pin, GPIO_PIN_RESET);
+	        HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_RESET);
+	    }
 
 
 
