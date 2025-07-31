@@ -30,6 +30,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include "IMG_20250425_000083.h"
 
 /* USER CODE END Includes */
 
@@ -60,6 +61,9 @@ DMA_HandleTypeDef hdma_uart7_rx;
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
+
+extern const uint8_t IMG_20250425_000083[];
+extern const uint32_t IMG_20250425_000083_SIZE;
 
 /* ---------- intentos.txt helpers ---------------------------------- */
 static const char *ATTEMPT_FILE = "intentos.txt";
@@ -340,7 +344,19 @@ int main(void)
 
   HAL_UARTEx_ReceiveToIdle_DMA(&huart7, uartRxBuf, sizeof(uartRxBuf));
   __HAL_DMA_DISABLE_IT(huart7.hdmarx, DMA_IT_HT);   // we only need TC & IDLE
-  myprintf("Ready – waiting for 0x55 0xAA …\r\n");
+  myprintf("Ready – waiting for 0x55 0xAA \r\n");
+  HAL_Delay(1000);
+
+  /*
+  myprintf("Prueba_wardardo de imagen con h \r\n");
+
+  f_open(&fil, "glolgoglgo.jpg", FA_WRITE | FA_CREATE_ALWAYS);
+  UINT bw;
+
+  f_write(&fil, IMG_20250425_000083, IMG_20250425_000083_SIZE, &bw);
+  f_close(&fil);
+  myprintf("FINALIZADO \r\n");'
+  */
 
 
 
