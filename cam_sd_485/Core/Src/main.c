@@ -71,19 +71,8 @@ static uint32_t    imgNumber    = 0;          /* number for current image */
 
 
 
-static uint8_t uartRxBuf[4096];      // DMA ring
-
-#define CHUNK_SIZE   2048U           /* bytes per page that sender transmits */
-#define MAX_FRAME    70000U          /* keep your old limit */
-
-static uint32_t pageIdx   = 0;       /* bytes copied in *current* page       */
-static volatile bool ackPending = false;   /* main loop sends ACK when true   */
 
 
-
-#define PREAMBLE0   0x55
-#define PREAMBLE1   0xAA
-#define MAX_FRAME   70000U           /* max JPEG you expect (66 kB + margin) */
 
 /* ------------ big receive buffer -------------- */
 /* In AXI-SRAM so DMA and CPU can both access it */
@@ -102,7 +91,6 @@ static uint8_t lenIdx  = 0;
 
 
 
-static void parserFeed(uint8_t b) ;
 
 
 void myprintf(const char *fmt, ...);
@@ -133,6 +121,11 @@ static void MX_USB_OTG_FS_PCD_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+
+FATFS   FatFs;     /* FatFs handle      */
+FIL     fil;       /* File handle (reuse for both .JPG and intentos.txt) */
+FRESULT fres;
+
 void myprintf(const char *fmt, ...) {
   static char buffer[256];
   va_list args;
@@ -145,15 +138,7 @@ void myprintf(const char *fmt, ...) {
 
 }
 
-// Buffer for UART→SD
-uint8_t rxBuf[256];
-uint32_t jpegLen = 0;
-UINT bytesWritten;
-FRESULT fres;
 
-FATFS   FatFs;     /* FatFs handle      */
-FIL     fil;       /* File handle (reuse for both .JPG and intentos.txt) */
-FRESULT fres;
 
 static uint32_t get_last_attempt(void)
 {
@@ -187,63 +172,6 @@ static void log_attempt(uint32_t num)
 }
 
 
-
-void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *hu, uint16_t Size)
-{
-    if (hu != &huart7) return;               /* only UART7 */
-
-    uint8_t *src = uartRxBuf;
-
-    while (Size--) {
-        uint8_t b = *src++;
-
-        switch (rxSt) {
-
-        case RX_IDLE:                        /* hunt 0x55 */
-            if (b == PREAMBLE0) rxSt = RX_P1;
-            break;
-
-        case RX_P1:                          /* hunt 0xAA */
-            rxSt = (b == PREAMBLE1) ? RX_LEN : RX_IDLE;
-            lenIdx = 0;  frameExp = 0;
-            break;
-
-        case RX_LEN:                         /* collect 4-byte length */
-            frameExp |= (uint32_t)b << (8 * lenIdx++);
-            if (lenIdx == 4) {
-                if (frameExp > MAX_FRAME) {      /* too big → abort */
-                    rxSt = RX_IDLE;
-                } else {
-                    frameIdx = 0;
-                    rxSt = RX_PAYLOAD;
-                }
-            }
-            break;
-
-        case RX_PAYLOAD:
-            frameBuf[frameIdx++] = b;         /* copy byte to big buffer */
-            pageIdx++;                        /* step within current page */
-
-            /* ---- if page complete OR frame complete ---------------- */
-            if (pageIdx == CHUNK_SIZE || frameIdx == frameExp)
-            {
-                pageIdx = 0;                  /* start next page        */
-                ackPending = true;            /* signal main loop       */
-            }
-
-            /* ---- if frame fully received --------------------------- */
-            if (frameIdx >= frameExp) {
-                frameReady = true;            /* whole JPEG in RAM      */
-                rxSt = RX_IDLE;
-            }
-            break;
-        }
-    }
-
-    /* restart DMA */
-    HAL_UARTEx_ReceiveToIdle_DMA(&huart7, uartRxBuf, sizeof(uartRxBuf));
-    __HAL_DMA_DISABLE_IT(huart7.hdmarx, DMA_IT_HT);
-}
 
 
 /* USER CODE END 0 */
@@ -280,8 +208,6 @@ int main(void)
   MX_USART2_UART_Init();
   MX_SPI1_Init();
   MX_UART7_Init();
-  HAL_UARTEx_ReceiveToIdle_DMA(&huart7, uartRxBuf,  sizeof(uartRxBuf));
-  __HAL_DMA_DISABLE_IT(huart7.hdmarx, DMA_IT_HT);
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
   MX_FATFS_Init();
@@ -447,12 +373,12 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 1;
-  RCC_OscInitStruct.PLL.PLLN = 45;
+  RCC_OscInitStruct.PLL.PLLN = 20;
   RCC_OscInitStruct.PLL.PLLP = 2;
-  RCC_OscInitStruct.PLL.PLLQ = 6;
+  RCC_OscInitStruct.PLL.PLLQ = 4;
   RCC_OscInitStruct.PLL.PLLR = 2;
   RCC_OscInitStruct.PLL.PLLRGE = RCC_PLL1VCIRANGE_3;
-  RCC_OscInitStruct.PLL.PLLVCOSEL = RCC_PLL1VCOWIDE;
+  RCC_OscInitStruct.PLL.PLLVCOSEL = RCC_PLL1VCOMEDIUM;
   RCC_OscInitStruct.PLL.PLLFRACN = 0;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
@@ -466,7 +392,7 @@ void SystemClock_Config(void)
                               |RCC_CLOCKTYPE_D3PCLK1|RCC_CLOCKTYPE_D1PCLK1;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.SYSCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB3CLKDivider = RCC_APB3_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV1;
@@ -822,8 +748,6 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
-
 
 
 
