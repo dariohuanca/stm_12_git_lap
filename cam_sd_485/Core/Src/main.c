@@ -298,46 +298,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	    /* ---------- 1. Send ACK for each 2 048-byte page ---------- */
-	    if (ackPending) {
-	        uint8_t ack = 0x55;
-	        HAL_UART_Transmit(&huart7, &ack, 1, HAL_MAX_DELAY);
-	        ackPending = false;
-	    }
 
-	    /* ---------- 2. Whole frame arrived ? ---------------------- */
-	    if (frameReady) {
-	        frameReady = false;                 /* consume flag */
 
-	        /* ---- a. pick next image number from intentos.txt ---- */
-	        uint32_t imgNum = get_last_attempt() + 1;       /* e.g. 42 → 43 */
-	        char name[32];
-	        sprintf(name, "IMG_%06lu.JPG", imgNum);         /* IMG_000043.JPG */
-
-	        /* ---- b. write entire JPEG to SD in one call --------- */
-	        fres = f_open(&fil, name, FA_WRITE | FA_CREATE_ALWAYS);
-	        if (fres == FR_OK) {
-	            UINT bw;
-	            fres = f_write(&fil, frameBuf, frameExp, &bw);
-	            f_close(&fil);
-
-	            if (fres == FR_OK && bw == frameExp) {
-	                log_attempt(imgNum);                     /* add 43 to intentos.txt */
-	                myprintf("Stored %s (%lu bytes)\r\n", name, frameExp);
-	            } else {
-	                myprintf("Write err %u (bw=%u)\r\n", fres, bw);
-	            }
-	        } else {
-	            myprintf("Open %s fail (%u)\r\n", name, fres);
-	        }
-
-	        /* ---- c. 2-second LED light-show --------------------- */
-	        HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin|LD3_Pin, GPIO_PIN_SET); /* PB0+PB14 */
-	        HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_SET); /* PE1      */
-	        HAL_Delay(2000);
-	        HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin|LD3_Pin, GPIO_PIN_RESET);
-	        HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_RESET);
-	    }
 
 
 
