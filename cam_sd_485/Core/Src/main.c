@@ -26,6 +26,10 @@
  * cambio en la computadora
  * prueba de coommit en CubeIDE, carajoo
  *asdasdasdasdsadasdasdaadsadas
+ *asdasdasdasdsadasdasdaadsadas
+ *asdasdasdasdsadasdasdaadsadas
+ *as
+ *tmre
  */
 #include <stdio.h>
 #include <string.h>
