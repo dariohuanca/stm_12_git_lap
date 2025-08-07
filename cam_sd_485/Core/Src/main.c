@@ -81,7 +81,7 @@ static uint32_t    imgNumber    = 0;          /* number for current image */
 
 /* ------------ big receive buffer -------------- */
 /* In AXI-SRAM so DMA and CPU can both access it */
-static uint8_t  frameBuf[MAX_FRAME] __attribute__((section(".RAM_D1")));
+//static uint8_t  frameBuf[MAX_FRAME] __attribute__((section(".RAM_D1")));
 static uint32_t frameIdx   = 0;      /* how many payload bytes stored */
 static uint32_t frameExp   = 0;      /* expected length from header   */
 static volatile bool frameReady = false;
@@ -273,8 +273,8 @@ int main(void)
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,          GPIO_PIN_RESET);
 
 
-  HAL_UARTEx_ReceiveToIdle_DMA(&huart7, uartRxBuf, sizeof(uartRxBuf));
-  __HAL_DMA_DISABLE_IT(huart7.hdmarx, DMA_IT_HT);   // we only need TC & IDLE
+ // HAL_UARTEx_ReceiveToIdle_DMA(&huart7, uartRxBuf, sizeof(uartRxBuf));
+ // __HAL_DMA_DISABLE_IT(huart7.hdmarx, DMA_IT_HT);   // we only need TC & IDLE
   myprintf("Ready – waiting for 0x55 0xAA \r\n");
   HAL_Delay(1000);
 
