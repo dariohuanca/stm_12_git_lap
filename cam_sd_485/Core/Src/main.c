@@ -47,6 +47,22 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
+/* ---- CONFIGURE THIS ---- */
+#define LINK_UART_HANDLE  huart7          // <--- change to your UART handle (huart3, huart7, etc.)
+#define SAVE_FILENAME     "rx_inten.txt"    // file on the SD card to send
+/* ------------------------ */
+
+#define CHUNK          1024u
+#define SOF0           0x55
+#define SOF1           0xAA
+#define ACK            0x06
+#define NAK            0x15
+#define UART_TMO_MS    1000
+
+
+extern UART_HandleTypeDef LINK_UART_HANDLE;
+
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -76,36 +92,8 @@ static uint32_t    imgNumber    = 0;          /* number for current image */
 
 
 
-
-
-
-/* ------------ big receive buffer -------------- */
-/* In AXI-SRAM so DMA and CPU can both access it */
-//static uint8_t  frameBuf[MAX_FRAME] __attribute__((section(".RAM_D1")));
-static uint32_t frameIdx   = 0;      /* how many payload bytes stored */
-static uint32_t frameExp   = 0;      /* expected length from header   */
-static volatile bool frameReady = false;
-
-/* ------------ tiny RX state machine ----------- */
-typedef enum { RX_IDLE, RX_P1, RX_LEN, RX_PAYLOAD } rx_state_t;
-static rx_state_t rxSt = RX_IDLE;
-static uint8_t lenIdx  = 0;
-
-//static FIL       rxFile;
-//static uint16_t  crcRunning = 0;
-
-
-
-
-
 void myprintf(const char *fmt, ...);
 
-#define RING_SIZE 8192u                  /* 8 kB – plenty for 115 200 Bd   */
-#define RING_MASK (RING_SIZE - 1)        /* works because size is power-of-2 */
-
-static uint8_t  ring[RING_SIZE];
-static volatile uint32_t wrIdx = 0;      /* written ONLY in ISR            */
-static          uint32_t rdIdx = 0;      /* used ONLY in main-loop         */
 
 
 /* USER CODE END PV */
@@ -176,6 +164,156 @@ static void log_attempt(uint32_t num)
     }
 }
 
+/* ===== CRC16-CCITT (poly 0x1021, init 0xFFFF) ===== */
+static uint16_t crc16_ccitt(const uint8_t *data, uint32_t len)
+{
+    uint16_t crc = 0xFFFF;
+    for (uint32_t i = 0; i < len; i++) {
+        crc ^= ((uint16_t)data[i]) << 8;
+        for (uint8_t b = 0; b < 8; b++) {
+            crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021) : (uint16_t)(crc << 1);
+        }
+    }
+    return crc;
+}
+
+/* ===== UART helpers ===== */
+static int uart_send(const void *p, uint16_t n)
+{
+    return (HAL_UART_Transmit(&LINK_UART_HANDLE, (uint8_t*)p, n, HAL_MAX_DELAY) == HAL_OK) ? 0 : -1;
+}
+static bool uart_try_read(uint8_t *ch)  // non-blocking single byte
+{
+    return (HAL_UART_Receive(&LINK_UART_HANDLE, ch, 1, 0) == HAL_OK);
+}
+
+/* ===== ACK/NAK helper ===== */
+static int send_ack(uint16_t seq, uint8_t code)
+{
+    uint8_t a[3] = { code, (uint8_t)seq, (uint8_t)(seq >> 8) };
+    return uart_send(a, 3);
+}
+
+/* ===== Detect "SZ + size" header without blocking main loop ===== */
+static bool detect_header_nonblocking(uint32_t *out_size)
+{
+    static uint8_t state = 0;
+    static uint8_t sizebuf[4];
+    static uint8_t idx = 0;
+    uint8_t ch;
+
+    // Slurp any available bytes quickly
+    while (uart_try_read(&ch)) {
+        switch (state) {
+        case 0:  state = (ch == 'S') ? 1 : 0; break;
+        case 1:  state = (ch == 'Z') ? 2 : 0; idx = 0; break;
+        case 2:
+            sizebuf[idx++] = ch;
+            if (idx == 4) {
+                *out_size = (uint32_t)sizebuf[0]
+                          | ((uint32_t)sizebuf[1] << 8)
+                          | ((uint32_t)sizebuf[2] << 16)
+                          | ((uint32_t)sizebuf[3] << 24);
+                uint8_t ack = ACK; // tell sender we're ready
+                (void)uart_send(&ack, 1);
+                state = 0;
+                return true;
+            }
+            break;
+        }
+    }
+    return false;
+}
+
+/* ===== Receive one frame (blocking small reads) ===== */
+static int recv_frame(uint16_t *seq, uint8_t *payload, uint16_t *len)
+{
+    uint8_t b;
+
+    // Hunt SOF
+    do {
+        if (HAL_UART_Receive(&LINK_UART_HANDLE, &b, 1, UART_TMO_MS) != HAL_OK) return -1;
+    } while (b != SOF0);
+    if (HAL_UART_Receive(&LINK_UART_HANDLE, &b, 1, UART_TMO_MS) != HAL_OK || b != SOF1) return -2;
+
+    uint8_t hdr[4];
+    if (HAL_UART_Receive(&LINK_UART_HANDLE, hdr, 4, UART_TMO_MS) != HAL_OK) return -3;
+
+    uint16_t seq_le = (uint16_t)hdr[0] | ((uint16_t)hdr[1] << 8);
+    uint16_t l      = (uint16_t)hdr[2] | ((uint16_t)hdr[3] << 8);
+    if (l == 0 || l > CHUNK) return -4;
+
+    if (HAL_UART_Receive(&LINK_UART_HANDLE, payload, l, UART_TMO_MS) != HAL_OK) return -5;
+
+    uint8_t crcb[2];
+    if (HAL_UART_Receive(&LINK_UART_HANDLE, crcb, 2, UART_TMO_MS) != HAL_OK) return -6;
+    uint16_t rxcrc = (uint16_t)crcb[0] | ((uint16_t)crcb[1] << 8);
+
+    uint16_t calcc = crc16_ccitt(payload, l);
+    if (rxcrc != calcc) { *seq = seq_le; return -7; }
+
+    *seq = seq_le; *len = l;
+    return 0;
+}
+
+/* ===== Receive file AFTER header has been detected ===== */
+int receive_frames_after_header(const char *save_path, uint32_t expected_size)
+{
+    FRESULT fr;
+    FATFS   fs;
+    FIL     f;
+    UINT    bw;
+    static uint8_t buf[CHUNK];
+
+    MX_FATFS_Init();
+    fr = f_mount(&fs, "", 1); if (fr != FR_OK) return -100;
+
+    fr = f_open(&f, save_path, FA_WRITE | FA_CREATE_ALWAYS);
+    if (fr != FR_OK) { f_mount(NULL, "", 0); return -101; }
+
+    uint32_t received = 0;
+    uint16_t expect_seq = 0;
+
+    while (received < expected_size) {
+        uint16_t seq, len;
+        int r = recv_frame(&seq, buf, &len);
+        if (r == 0 && seq == expect_seq) {
+            fr = f_write(&f, buf, len, &bw);
+            if (fr != FR_OK || bw != len) {
+                send_ack(seq, NAK);
+                f_close(&f); f_mount(NULL,"",0);
+                return -102;
+            }
+            received += len;
+            send_ack(seq, ACK);
+            expect_seq++;
+        } else {
+            uint16_t nak_seq = (r == 0) ? expect_seq : seq;
+            send_ack(nak_seq, NAK);
+        }
+    }
+
+    f_sync(&f);
+    f_close(&f);
+    f_mount(NULL, "", 0);
+    return 0;
+}
+
+/* ===== Call this from your main loop ===== */
+static bool receiving = false;
+static uint32_t pending_size = 0;
+
+void user_loop_receiver(void)
+{
+    if (!receiving) {
+        if (detect_header_nonblocking(&pending_size)) {
+            receiving = true;
+            (void)receive_frames_after_header(SAVE_FILENAME, pending_size); // blocks until done
+            receiving = false;
+        }
+    }
+}
+/* ================== END H753 RECEIVER ================== */
 
 
 
@@ -219,8 +357,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   myprintf("\r\n~ SD card demo by kiwih ~\r\n\r\n");
 
-  HAL_Delay(1000); //a short delay is important to let the SD card settle
-  HAL_Delay(1000); //a short delay is important to let the SD card settle
+  HAL_Delay(2000); //a short delay is important to let the SD card settle
 
   //some variables for FatFs
   FATFS FatFs; 	//Fatfs handle
