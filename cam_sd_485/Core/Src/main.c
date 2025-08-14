@@ -49,7 +49,7 @@
 
 /* ---- CONFIGURE THIS ---- */
 #define LINK_UART_HANDLE  huart7          // <--- change to your UART handle (huart3, huart7, etc.)
-#define SAVE_FILENAME     "rx_inten.txt"    // file on the SD card to send
+#define SAVE_FILENAME     "words_1500.txt"    // file on the SD card to send
 /* ------------------------ */
 
 #define CHUNK          1024u
@@ -102,11 +102,11 @@ void myprintf(const char *fmt, ...);
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
-static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_UART7_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
+static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -202,6 +202,7 @@ static bool detect_header_nonblocking(uint32_t *out_size)
     static uint8_t idx = 0;
     uint8_t ch;
 
+    //myprintf("Entro detect header \r\n");
     // Slurp any available bytes quickly
     while (uart_try_read(&ch)) {
         switch (state) {
@@ -218,6 +219,7 @@ static bool detect_header_nonblocking(uint32_t *out_size)
                 (void)uart_send(&ack, 1);
                 state = 0;
                 return true;
+                myprintf("Carajo \r\n");
             }
             break;
         }
@@ -273,8 +275,9 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
 
     uint32_t received = 0;
     uint16_t expect_seq = 0;
-
+    myprintf("Recibio x2 \r\n");
     while (received < expected_size) {
+    	myprintf("Recibio x3 \r\n");
         uint16_t seq, len;
         int r = recv_frame(&seq, buf, &len);
         if (r == 0 && seq == expect_seq) {
@@ -308,6 +311,7 @@ void user_loop_receiver(void)
     if (!receiving) {
         if (detect_header_nonblocking(&pending_size)) {
             receiving = true;
+            myprintf("Recibio \r\n");
             (void)receive_frames_after_header(SAVE_FILENAME, pending_size); // blocks until done
             receiving = false;
         }
@@ -348,11 +352,11 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_USART2_UART_Init();
   MX_SPI1_Init();
   MX_UART7_Init();
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
+  MX_USART2_UART_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
   myprintf("\r\n~ SD card demo by kiwih ~\r\n\r\n");
@@ -412,7 +416,7 @@ int main(void)
 
  // HAL_UARTEx_ReceiveToIdle_DMA(&huart7, uartRxBuf, sizeof(uartRxBuf));
  // __HAL_DMA_DISABLE_IT(huart7.hdmarx, DMA_IT_HT);   // we only need TC & IDLE
-  myprintf("Ready – waiting for 0x55 0xAA \r\n");
+  myprintf("Ready waiting for 0x55 0xAA \r\n");
   HAL_Delay(1000);
 
   /*
@@ -440,7 +444,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
+	  user_loop_receiver();
 
 
 
@@ -572,7 +576,7 @@ static void MX_UART7_Init(void)
 
   /* USER CODE END UART7_Init 1 */
   huart7.Instance = UART7;
-  huart7.Init.BaudRate = 115200;
+  huart7.Init.BaudRate = 1200;
   huart7.Init.WordLength = UART_WORDLENGTH_8B;
   huart7.Init.StopBits = UART_STOPBITS_1;
   huart7.Init.Parity = UART_PARITY_NONE;
@@ -620,7 +624,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
+  huart2.Init.BaudRate = 1200;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
