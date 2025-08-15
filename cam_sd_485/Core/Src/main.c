@@ -49,10 +49,10 @@
 
 /* ---- CONFIGURE THIS ---- */
 #define LINK_UART_HANDLE  huart7          // <--- change to your UART handle (huart3, huart7, etc.)
-#define SAVE_FILENAME     "words_1500.txt"    // file on the SD card to send
+#define SAVE_FILENAME     "35bytes.txt"    // file on the SD card to send
 /* ------------------------ */
 
-#define CHUNK          1024u
+#define CHUNK          16u
 #define SOF0           0x55
 #define SOF1           0xAA
 #define ACK            0x06
@@ -218,8 +218,9 @@ static bool detect_header_nonblocking(uint32_t *out_size)
                 uint8_t ack = ACK; // tell sender we're ready
                 (void)uart_send(&ack, 1);
                 state = 0;
-                return true;
                 myprintf("Carajo \r\n");
+                return true;
+
             }
             break;
         }
@@ -266,6 +267,7 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
     FIL     f;
     UINT    bw;
     static uint8_t buf[CHUNK];
+    myprintf("Recibio x2 \r\n");
 
     MX_FATFS_Init();
     fr = f_mount(&fs, "", 1); if (fr != FR_OK) return -100;
@@ -277,12 +279,14 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
     uint16_t expect_seq = 0;
     myprintf("Recibio x2 \r\n");
     while (received < expected_size) {
-    	myprintf("Recibio x3 \r\n");
+
         uint16_t seq, len;
         int r = recv_frame(&seq, buf, &len);
         if (r == 0 && seq == expect_seq) {
+        	myprintf("Recibio x3 \r\n");
             fr = f_write(&f, buf, len, &bw);
             if (fr != FR_OK || bw != len) {
+            	myprintf("Recibio x5 \r\n");
                 send_ack(seq, NAK);
                 f_close(&f); f_mount(NULL,"",0);
                 return -102;
@@ -290,10 +294,12 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
             received += len;
             send_ack(seq, ACK);
             expect_seq++;
-        } else {
+        }
+        else {
             uint16_t nak_seq = (r == 0) ? expect_seq : seq;
             send_ack(nak_seq, NAK);
         }
+        myprintf("received = %lu bytes\r\n", (unsigned long)received);
     }
 
     f_sync(&f);
@@ -312,6 +318,7 @@ void user_loop_receiver(void)
         if (detect_header_nonblocking(&pending_size)) {
             receiving = true;
             myprintf("Recibio \r\n");
+            myprintf("expected_size = %lu bytes\r\n", (unsigned long)pending_size);
             (void)receive_frames_after_header(SAVE_FILENAME, pending_size); // blocks until done
             receiving = false;
         }
