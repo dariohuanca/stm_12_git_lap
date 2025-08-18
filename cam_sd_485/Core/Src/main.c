@@ -49,10 +49,10 @@
 
 /* ---- CONFIGURE THIS ---- */
 #define LINK_UART_HANDLE  huart7          // <--- change to your UART handle (huart3, huart7, etc.)
-#define SAVE_FILENAME     "35bytes.txt"    // file on the SD card to send
+#define SAVE_FILENAME     "im3.JPG"    // file on the SD card to send
 /* ------------------------ */
 
-#define CHUNK          16u
+#define CHUNK          64u
 #define SOF0           0x55
 #define SOF1           0xAA
 #define ACK            0x06
@@ -283,7 +283,7 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
         uint16_t seq, len;
         int r = recv_frame(&seq, buf, &len);
         if (r == 0 && seq == expect_seq) {
-        	myprintf("Recibio x3 \r\n");
+        	//myprintf("Recibio x3 \r\n");
             fr = f_write(&f, buf, len, &bw);
             if (fr != FR_OK || bw != len) {
             	myprintf("Recibio x5 \r\n");
@@ -304,6 +304,7 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
 
     f_sync(&f);
     f_close(&f);
+    myprintf("termino\r\n", (unsigned long)received);
     f_mount(NULL, "", 0);
     return 0;
 }
