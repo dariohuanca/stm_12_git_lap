@@ -49,7 +49,7 @@
 
 /* ---- CONFIGURE THIS ---- */
 #define LINK_UART_HANDLE  huart7          // <--- change to your UART handle (huart3, huart7, etc.)
-#define SAVE_FILENAME     "im3.JPG"    // file on the SD card to send
+#define SAVE_FILENAME     "im4.JPG"    // file on the SD card to send
 /* ------------------------ */
 
 #define CHUNK          64u
