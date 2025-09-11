@@ -267,7 +267,7 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
     FIL     f;
     UINT    bw;
     static uint8_t buf[CHUNK];
-    myprintf("Recibio x2 \r\n");
+
 
     MX_FATFS_Init();
     fr = f_mount(&fs, "", 1); if (fr != FR_OK) return -100;
@@ -277,7 +277,7 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
 
     uint32_t received = 0;
     uint16_t expect_seq = 0;
-    myprintf("Recibio x2 \r\n");
+    myprintf("Abrio, antes de while  \r\n");
     while (received < expected_size) {
 
         uint16_t seq, len;
@@ -286,7 +286,7 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
         	//myprintf("Recibio x3 \r\n");
             fr = f_write(&f, buf, len, &bw);
             if (fr != FR_OK || bw != len) {
-            	myprintf("Recibio x5 \r\n");
+            	myprintf("F \r\n");
                 send_ack(seq, NAK);
                 f_close(&f); f_mount(NULL,"",0);
                 return -102;
@@ -295,10 +295,29 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
             send_ack(seq, ACK);
             expect_seq++;
         }
+        /*
         else {
             uint16_t nak_seq = (r == 0) ? expect_seq : seq;
             send_ack(nak_seq, NAK);
+            myprintf("Else NAK \r\n");
         }
+        */
+        else {
+            // r == 0 but wrong seq  -> out-of-order/duplicate: NAK that seq
+            // r == -7 (CRC fail)    -> we set *seq inside recv_frame: NAK that seq
+            // r < 0 before seq known (timeout/parse error): DO NOT NAK
+            if (r == 0) {
+                send_ack(seq, NAK);
+            } else if (r == -7) {
+                send_ack(seq, NAK);
+            } else {
+            	myprintf("No NAK  \r\n");
+                // just wait; don't spam NAKs when no frame was seen yet
+                // optional: small delay to avoid hot loop
+                //HAL_Delay(1);
+            }
+        }
+
         myprintf("received = %lu bytes\r\n", (unsigned long)received);
     }
 
@@ -318,8 +337,9 @@ void user_loop_receiver(void)
     if (!receiving) {
         if (detect_header_nonblocking(&pending_size)) {
             receiving = true;
-            myprintf("Recibio \r\n");
+            myprintf("Recibio encabezado \r\n");
             myprintf("expected_size = %lu bytes\r\n", (unsigned long)pending_size);
+            //HAL_Delay(500);
             (void)receive_frames_after_header(SAVE_FILENAME, pending_size); // blocks until done
             receiving = false;
         }
