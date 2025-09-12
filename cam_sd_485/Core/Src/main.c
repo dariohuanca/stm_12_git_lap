@@ -49,10 +49,10 @@
 
 /* ---- CONFIGURE THIS ---- */
 #define LINK_UART_HANDLE  huart7          // <--- change to your UART handle (huart3, huart7, etc.)
-#define SAVE_FILENAME     "im6.JPG"    // file on the SD card to send
+#define SAVE_FILENAME     "im9confe.JPG"    // file on the SD card to send
 /* ------------------------ */
 
-#define CHUNK          64u
+#define CHUNK          256u
 #define SOF0           0x55
 #define SOF1           0xAA
 #define ACK            0x06
@@ -215,10 +215,15 @@ static bool detect_header_nonblocking(uint32_t *out_size)
                           | ((uint32_t)sizebuf[1] << 8)
                           | ((uint32_t)sizebuf[2] << 16)
                           | ((uint32_t)sizebuf[3] << 24);
+                //uint16_t seq, len;
+                //send_ack(seq, ACK);
+
                 uint8_t ack = ACK; // tell sender we're ready
-                (void)uart_send(&ack, 1);
+                //int e = uart_send(&ack, 1);
+                int e = HAL_UART_Transmit(&LINK_UART_HANDLE, &ack, 1, HAL_MAX_DELAY);
                 state = 0;
-                myprintf("Carajo \r\n");
+                myprintf("envio fue = %d \r\n", e);
+                //myprintf("El envio fue 0x%02X\r\n", (unsigned)e);
                 return true;
 
             }
@@ -269,8 +274,8 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
     static uint8_t buf[CHUNK];
 
 
-    MX_FATFS_Init();
-    fr = f_mount(&fs, "", 1); if (fr != FR_OK) return -100;
+    //MX_FATFS_Init();
+    //fr = f_mount(&fs, "", 1); if (fr != FR_OK) return -100;
 
     fr = f_open(&f, save_path, FA_WRITE | FA_CREATE_ALWAYS);
     if (fr != FR_OK) { f_mount(NULL, "", 0); return -101; }
@@ -278,10 +283,21 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
     uint32_t received = 0;
     uint16_t expect_seq = 0;
     myprintf("Abrio, antes de while  \r\n");
+    //uint16_t seq, len;
+    //send_ack(seq, ACK);
+
+
+
+
+
     while (received < expected_size) {
 
         uint16_t seq, len;
+        //send_ack(seq, ACK);
+
         int r = recv_frame(&seq, buf, &len);
+        myprintf("R = %d \r\n", r);
+        HAL_Delay(500);
         if (r == 0 && seq == expect_seq) {
         	//myprintf("Recibio x3 \r\n");
             fr = f_write(&f, buf, len, &bw);
@@ -312,6 +328,7 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
                 send_ack(seq, NAK);
             } else {
             	myprintf("No NAK  \r\n");
+            	//send_ack(seq, ACK);
                 // just wait; don't spam NAKs when no frame was seen yet
                 // optional: small delay to avoid hot loop
                 //HAL_Delay(1);
@@ -604,7 +621,7 @@ static void MX_UART7_Init(void)
 
   /* USER CODE END UART7_Init 1 */
   huart7.Instance = UART7;
-  huart7.Init.BaudRate = 1200;
+  huart7.Init.BaudRate = 4800;
   huart7.Init.WordLength = UART_WORDLENGTH_8B;
   huart7.Init.StopBits = UART_STOPBITS_1;
   huart7.Init.Parity = UART_PARITY_NONE;
