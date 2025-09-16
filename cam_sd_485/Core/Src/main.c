@@ -389,6 +389,10 @@ void user_loop_receiver(void)
 
 
 
+
+
+
+
 /* **************************************** Programacion de comandos ********************************************/
 
 /************************************************
@@ -419,6 +423,169 @@ uint32_t CRC32;
 /*Variable*/
 uint8_t count;
 uint8_t val;
+
+/*Funcion generadora del CRC16 */
+uint16_t gener_crc16 (uint8_t TA,uint8_t SA,uint8_t PPID,uint8_t PS){
+
+	 /***************************************************
+	  * Definicion de variables y algoritmo para el CRC16
+	  * Con inversion de bits
+	  * CRC-CCITT-BR (bit reverse): LSB first
+	  * CRC16, G(x)=0x1021 (algoritmo)
+	  * CRC initial: 0XFFFF
+	  * Cabecera inicial: 0x88 0x05 0x01 0x01
+	  * Cabecera invertida: 0x80 0x80 0xA0 0x11
+	  ***************************************************/
+	  uint16_t G_X = 0x1021; // Polynomial generator
+	  uint16_t CRC16 = 0xFFFF;
+	  uint8_t arreglo[4] = {TA,SA,PPID,PS};//Se aumento PPID,PS
+	  uint8_t InvArreglo[4] = {};
+	  uint8_t InvBits[4] ={}; //Arreglo de bits invertidos de la cabecera  (LSB first)
+	  uint8_t Temp;
+	  uint8_t Fin=0x00;
+	  uint8_t n = sizeof(arreglo)/sizeof(arreglo[0]);
+
+	  //Se invierten los elementos del array
+	  //Cabecera actual: 0x01 0x01 0x05 0x88
+	  for(int i=0; i<n; i++){
+		  InvArreglo[i]=arreglo[n-i-1];
+	  }
+
+	  //InvArreglo[0]=0x35;
+
+	  //Se invierten los bits de los elementos del array
+	  //Cabecera LBS: 0x80 0x80 0xA0 0x11
+	  for(int j=0; j<n;j++){
+		  for(int i=0; i<8; i++){
+			  Temp=InvArreglo[j]&(0x80);
+			  //InvBits[0]=InvArreglo[1];
+			  //HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
+			  //HAL_Delay(1000);
+			  if(Temp!=0x00){
+				  Fin=(Fin>>1);
+				  Fin=Fin|(0x80);
+				  InvArreglo[j]=(InvArreglo[j]<<1);
+				  // InvBits[0]=Fin;
+				  // HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
+				  // HAL_Delay(1000);
+			  }else{
+				  Fin=(Fin>>1);
+				  InvArreglo[j]=(InvArreglo[j]<<1);
+				  //InvBits[0]=InvArreglo[0];
+				  //HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
+				  //HAL_Delay(1000);
+			  }
+		  }
+		  InvBits[j]=Fin;
+		  Fin=0x00;
+	  }
+
+	  //Algoritmo para la generación del CRC16 de la cabecera invertida
+	  for(int i=0; i<sizeof(InvBits)/sizeof(InvBits[0]); i++){
+	  	  CRC16 ^= (uint16_t)(InvBits[i]<<8);
+
+	  	  for (int i=0; i<8; i++){
+	  		  if ((CRC16 & 0x8000) != 0){
+	  			  CRC16 = (uint16_t)((CRC16 <<1)^G_X);
+	  		  }else{
+	  			  CRC16 <<=1;
+	  		  }
+	  	  }
+	   }
+
+	  return CRC16;
+
+	  // El CRC16 de 0x8805 = 0xC294
+	  // El CRC16 de 0x88050101 = 0x901B
+	  // El CRC16 de 0x8080A011 (0x88050101 invertido) = 0x7DCC
+
+	  /*uint8_t CRC16_0 = (uint8_t)(CRC16 & 0x00FF);
+	  uint8_t CRC16_1 = (uint8_t)((CRC16 >> 8)& 0x00FF);*/
+}
+/*******************************************************************************************************************/
+
+/*Funcion generadora del CRC32*/
+uint32_t gener_crc32 (uint8_t TA,uint8_t SA,uint8_t PPID,uint8_t PS,uint8_t CRC16_1, uint8_t CRC16_0,uint8_t payload_envio_0){
+
+	/***************************************************
+	   * Definicion de variables y algoritmo para el CRC32
+	   * Con inversion de bits
+	   * CRC-CRC32-ISO3309, LSB first
+	   * CRC32, G(x)= 0x04C11DB7 (algoritmo)
+	   * CRC initial: 0xFFFFFFFF
+	   * Prueba inicial: 0x88 05 01 01 7D CC 01
+	  **************************************************/
+	  uint32_t G_Y = 0x04C11DB7; // Polynomial generator
+	  uint32_t CRC32 = 0xFFFFFFFF;
+	  uint8_t arreglo2[7]={TA,SA,PPID,PS,CRC16_1,CRC16_0,payload_envio_0};
+
+	  uint8_t InvArreglo2[7] = {};
+	  uint8_t InvBits2[7] ={}; //Arreglo de bits invertidos de la cabecera  (LSB first)
+	  //uint8_t InvBits3[1]={};
+	  uint8_t Temp2;
+	  uint8_t Fin2=0x00;
+	  uint8_t n2 = sizeof(arreglo2)/sizeof(arreglo2[0]);
+
+	  //Se invierten los elementos del array
+	  //Frame actual: 0x01 0xCC 0x7D 0x01 0x01 0x05 0x88
+	  for(int i=0; i<n2; i++){
+		  InvArreglo2[i]=arreglo2[n2-i-1];
+	  }
+
+	  //Se invierten los bits de los elementos del array
+	  //Frame LBS: 0x80 0x33 0xBE 0x80 0x80 0xA0 0x11
+	  for(int j=0; j<n2;j++){
+	  	  for(int i=0; i<8; i++){
+	  		  Temp2=InvArreglo2[j]&(0x80);
+	    	   	  //InvBits3[0]=InvArreglo2[j];
+	    	   	  //HAL_UART_Transmit(&huart2,InvBits3,sizeof(InvBits3),100);// Sending in normal mode
+	    	   	  //HAL_Delay(1000);
+	  		  if(Temp2!=0x00){
+	  			  Fin2=(Fin2>>1);
+	  			  Fin2=Fin2|(0x80);
+	  			  InvArreglo2[j]=(InvArreglo2[j]<<1);
+	    	   		  //InvBits3[0]=Fin2;
+	    	   		  //HAL_UART_Transmit(&huart2,InvBits3,sizeof(InvBits3),100);// Sending in normal mode
+	    	   		  //HAL_Delay(1000);
+	  		  }else{
+	  			  Fin2=(Fin2>>1);
+	  			  InvArreglo2[j]=(InvArreglo2[j]<<1);
+	  			  //InvBits[0]=InvArreglo[0];
+	    	   		  //HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
+	    	   		  //HAL_Delay(1000);
+	  		  }
+	  	  }
+	  	  InvBits2[j]=Fin2;
+	  	  Fin2=0x00;
+	  }
+
+	  //InvBits3[0]=InvBits2[6];
+	  //HAL_UART_Transmit(&huart2,InvBits3,sizeof(InvBits3),100);// Sending in normal mode
+	  //HAL_Delay(1000);
+
+	  //Algoritmo para la generación del CRC32 de la cabecera invertida
+	  for(int j=0; j<sizeof(InvBits2)/sizeof(InvBits2[0]); j++){
+	  	  CRC32 ^= (uint32_t)(InvBits2[j]<<24);
+
+	  	  for (int j=0; j<8; j++){
+	  		  if ((CRC32 & 0x80000000) != 0){
+	  			  CRC32 = (uint32_t)((CRC32 <<1)^G_Y);
+	  		  }else{
+	  			  CRC32 <<=1;
+	  		  }
+	  	  }
+	  }
+
+	  return CRC32;
+
+	  // El CRC32 de 0x88050101 = 0x486ABA9C
+	  // El CRC32 de 0x8033BE8080A011 = 0x81C46721
+	  /*uint8_t CRC32_byte3 = (uint8_t)((CRC32 >> 24) & 0xFF);//MSB
+	  uint8_t CRC32_byte2 = (uint8_t)((CRC32 >> 16) & 0xFF);
+	  uint8_t CRC32_byte1 = (uint8_t)((CRC32 >> 8) & 0xFF);
+	  uint8_t CRC32_byte0 = (uint8_t)(CRC32 & 0xFF);//LSB*/
+}
+
 
 /*******************************************************************************************************************/
 
@@ -539,218 +706,84 @@ int main(void)
 
   /***********************************  Definicion de variables para el comandos ***********************************/
 
-   /**************************
-    Definicion de cabeceras I
-   **************************/
-   TA=0x88;
-   SA=0x05;
-   PPID=0x01;
+  /**************************
+   Definicion de cabeceras I
+  **************************/
+  TA=0x88;
+  SA=0x05;
+  PPID=0x01;
 
-   /**********************************
-    Definicion payload de envío
-    Comando de foto en camara 1: 0x01
-   **********************************/
-   switch(PPID){
-    case 0x01:
-   	payload_total[0]=0x01; /*TomaFotoSD*/
-   	break;
-    case 0x02:
-   	payload_total[0]=0x02; /*EnvíoFotoPaySTM32*/
-     break;
-    default:
-     payload_total[0]=0xFF;
-   }
+  /**********************************
+   Definicion payload de envío
+   Comando de foto en camara 1: 0x01
+  **********************************/
+  switch(PPID){
+   case 0x01:
+  	payload_total[0]=0x01; /*TomaFotoSD*/
+  	break;
+   case 0x02:
+  	payload_total[0]=0x02; /*EnvíoFotoPaySTM32*/
+    break;
+   case 0x03:
+    payload_total[0]=0x03; /*TomaFotoALmacYenviaPayload*/
+    break;
+   default:
+    payload_total[0]=0xFF;
+  }
 
-  /***************************
-    Definicion de cabeceras II
-   **************************/
+ /***************************
+   Definicion de cabeceras II
+  **************************/
 
-   /*Define la cantidad de bytes (size) del payload*/
-   for (int i=0; i<255; i++){
- 	  val = payload_total[i] & 0b11111111;
- 	  if (val != 0x00){
- 		  count=count+1;
- 	  }
-   }
+  /*Define la cantidad de bytes (size) del payload*/
+  for (int i=0; i<255; i++){
+	  val = payload_total[i] & 0b11111111;
+	  if (val != 0x00){
+		  count=count+1;
+	  }
+  }
 
-   /*cumple con darnos la cantidad de bytes(size) del payload*/
-   PS=count;
+  /*cumple con darnos la cantidad de bytes(size) del payload*/
+  PS=count;
 
-   /*for(int i=0; i<count; i++){
-    	   payload_envio[i]=payload_total[i];
-   }*/
-   payload_envio[0]=payload_total[0];
+  /*for(int i=0; i<count; i++){
+   	   payload_envio[i]=payload_total[i];
+  }*/
+  payload_envio[0]=payload_total[0];
 
-   /***************************************************
-   * Definicion de variables y algoritmo para el CRC16
-   * Con inversion de bits
-   * CRC-CCITT-BR (bit reverse): LSB first
-   * CRC16, G(x)=0x1021 (algoritmo)
-   * CRC initial: 0XFFFF
-   * Cabecera inicial: 0x88 0x05 0x01 0x01
-   * Cabecera invertida: 0x80 0x80 0xA0 0x11
-   ***************************************************/
-   uint16_t G_X = 0x1021; // Polynomial generator
-   uint16_t CRC16 = 0xFFFF;
-   uint8_t arreglo[4] = {TA,SA,PPID,PS};//Se aumento PPID,PS
-   uint8_t InvArreglo[4] = {};
-   uint8_t InvBits[4] ={}; //Arreglo de bits invertidos de la cabecera  (LSB first)
-   uint8_t Temp;
-   uint8_t Fin=0x00;
-   uint8_t n = sizeof(arreglo)/sizeof(arreglo[0]);
+  /******************************
+   * Hallando el CRC16 y CRC32
+   ******************************/
+  uint16_t CRC16 = gener_crc16(TA,SA,PPID,PS);
 
-   //Se invierten los elementos del array
-   //Cabecera actual: 0x01 0x01 0x05 0x88
-   for(int i=0; i<n; i++){
- 	  InvArreglo[i]=arreglo[n-i-1];
-   }
+  uint8_t CRC16_0 = (uint8_t)(CRC16 & 0x00FF);
+  uint8_t CRC16_1 = (uint8_t)((CRC16 >> 8)& 0x00FF);
 
-   //InvArreglo[0]=0x35;
+  uint32_t CRC32 = gener_crc32(TA,SA,PPID,PS,CRC16_1,CRC16_0,payload_envio[0]);
 
-   //Se invierten los bits de los elementos del array
-   //Cabecera LBS: 0x80 0x80 0xA0 0x11
-   for(int j=0; j<n;j++){
- 	  for(int i=0; i<8; i++){
- 		  Temp=InvArreglo[j]&(0x80);
- 		  //InvBits[0]=InvArreglo[1];
- 		  //HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
- 		  //HAL_Delay(1000);
- 		  if(Temp!=0x00){
- 			  Fin=(Fin>>1);
- 			  Fin=Fin|(0x80);
- 			  InvArreglo[j]=(InvArreglo[j]<<1);
- 			  // InvBits[0]=Fin;
- 			  // HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
- 			  // HAL_Delay(1000);
- 		  }else{
- 			  Fin=(Fin>>1);
- 			  InvArreglo[j]=(InvArreglo[j]<<1);
- 			  //InvBits[0]=InvArreglo[0];
- 			  //HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
- 			  //HAL_Delay(1000);
- 		  }
- 	  }
- 	  InvBits[j]=Fin;
- 	  Fin=0x00;
-   }
-
-   //Algoritmo para la generación del CRC16 de la cabecera invertida
-   for(int i=0; i<sizeof(InvBits)/sizeof(InvBits[0]); i++){
-   	  CRC16 ^= (uint16_t)(InvBits[i]<<8);
-
-   	  for (int i=0; i<8; i++){
-   		  if ((CRC16 & 0x8000) != 0){
-   			  CRC16 = (uint16_t)((CRC16 <<1)^G_X);
-   		  }else{
-   			  CRC16 <<=1;
-   		  }
-   	  }
-    }
-
-   // El CRC16 de 0x8805 = 0xC294
-   // El CRC16 de 0x88050101 = 0x901B
-   // El CRC16 de 0x8080A011 (0x88050101 invertido) = 0x7DCC
-   uint8_t CRC16_0 = (uint8_t)(CRC16 & 0x00FF);
-   uint8_t CRC16_1 = (uint8_t)((CRC16 >> 8)& 0x00FF);
-
-   /***************************************************
-    * Definicion de variables y algoritmo para el CRC32
-    * Con inversion de bits
-    * CRC-CRC32-ISO3309, LSB first
-    * CRC32, G(x)= 0x04C11DB7 (algoritmo)
-    * CRC initial: 0xFFFFFFFF
-    * Prueba inicial: 0x88 05 01 01 7D CC 01
-   **************************************************/
-   uint32_t G_Y = 0x04C11DB7; // Polynomial generator
-   uint32_t CRC32 = 0xFFFFFFFF;
-   uint8_t arreglo2[7]={TA,SA,PPID,PS,CRC16_1,CRC16_0,payload_envio[0]};
-
-   uint8_t InvArreglo2[7] = {};
-   uint8_t InvBits2[7] ={}; //Arreglo de bits invertidos de la cabecera  (LSB first)
-   //uint8_t InvBits3[1]={};
-   uint8_t Temp2;
-   uint8_t Fin2=0x00;
-   uint8_t n2 = sizeof(arreglo2)/sizeof(arreglo2[0]);
-
-   //Se invierten los elementos del array
-   //Frame actual: 0x01 0xCC 0x7D 0x01 0x01 0x05 0x88
-   for(int i=0; i<n2; i++){
- 	  InvArreglo2[i]=arreglo2[n2-i-1];
-   }
-
-   //Se invierten los bits de los elementos del array
-   //Frame LBS: 0x80 0x33 0xBE 0x80 0x80 0xA0 0x11
-   for(int j=0; j<n2;j++){
-   	  for(int i=0; i<8; i++){
-   		  Temp2=InvArreglo2[j]&(0x80);
-     	   	  //InvBits3[0]=InvArreglo2[j];
-     	   	  //HAL_UART_Transmit(&huart2,InvBits3,sizeof(InvBits3),100);// Sending in normal mode
-     	   	  //HAL_Delay(1000);
-   		  if(Temp2!=0x00){
-   			  Fin2=(Fin2>>1);
-   			  Fin2=Fin2|(0x80);
-   			  InvArreglo2[j]=(InvArreglo2[j]<<1);
-     	   		  //InvBits3[0]=Fin2;
-     	   		  //HAL_UART_Transmit(&huart2,InvBits3,sizeof(InvBits3),100);// Sending in normal mode
-     	   		  //HAL_Delay(1000);
-   		  }else{
-   			  Fin2=(Fin2>>1);
-   			  InvArreglo2[j]=(InvArreglo2[j]<<1);
-   			  //InvBits[0]=InvArreglo[0];
-     	   		  //HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
-     	   		  //HAL_Delay(1000);
-   		  }
-   	  }
-   	  InvBits2[j]=Fin2;
-   	  Fin2=0x00;
-   }
-
-   //InvBits3[0]=InvBits2[6];
-   //HAL_UART_Transmit(&huart2,InvBits3,sizeof(InvBits3),100);// Sending in normal mode
-   //HAL_Delay(1000);
-
-   //Algoritmo para la generación del CRC32 de la cabecera invertida
-   for(int j=0; j<sizeof(InvBits2)/sizeof(InvBits2[0]); j++){
-   	  CRC32 ^= (uint32_t)(InvBits2[j]<<24);
-
-   	  for (int j=0; j<8; j++){
-   		  if ((CRC32 & 0x80000000) != 0){
-   			  CRC32 = (uint32_t)((CRC32 <<1)^G_Y);
-   		  }else{
-   			  CRC32 <<=1;
-   		  }
-   	  }
-   }
-
-   // El CRC32 de 0x88050101 = 0x486ABA9C
-   // El CRC32 de 0x8033BE8080A011 = 0x81C46721
-   uint8_t CRC32_byte3 = (uint8_t)((CRC32 >> 24) & 0xFF);//MSB
-   uint8_t CRC32_byte2 = (uint8_t)((CRC32 >> 16) & 0xFF);
-   uint8_t CRC32_byte1 = (uint8_t)((CRC32 >> 8) & 0xFF);
-   uint8_t CRC32_byte0 = (uint8_t)(CRC32 & 0xFF);//LSB
-
-   /************************************************************************************************
-    Armado de Protocolo |TA|SA|PPID|PS|CRC16_1|CRC16_0|Payload[0]|CRC32_3|CRC32_2|CRC32_1|CRC32_0|
-    y envio por serial
-    Cabecera 1: 0x88 0x05 0x01 0x01 0x7D 0xCC 0x01 0x81 0xC4 0x67 0x21
-   ************************************************************************************************/
-   //Para la web:
-   //uint8_t cab[] = {TA,SA,PPID,PS,CRC16_1,CRC16_0,payload_envio[0],CRC32_byte3,CRC32_byte2,CRC32_byte1,CRC32_byte0};
-   //Para Enduro: LSB primero
-   uint8_t cab[] = {TA,SA,PPID,PS,CRC16_0,CRC16_1,payload_envio[0],CRC32_byte0,CRC32_byte1,CRC32_byte2,CRC32_byte3};
-
-   myprintf("Enviando comando ... \n");
-   //myprintf("%X \n",cab);
-   //for
-   //uint8_t cab[] = {CRC32_byte3,CRC32_byte2,CRC32_byte1,CRC32_byte0};
-   HAL_Delay(500);
-   HAL_UART_Transmit(&huart2,cab,11,2500);// Sending in normal mode
-   HAL_Delay(500);
-   HAL_UART_Transmit(&huart7,cab,11,2500);// Sending in normal mode
-   HAL_Delay(100);
+  uint8_t CRC32_byte3 = (uint8_t)((CRC32 >> 24) & 0xFF);//MSB
+  uint8_t CRC32_byte2 = (uint8_t)((CRC32 >> 16) & 0xFF);
+  uint8_t CRC32_byte1 = (uint8_t)((CRC32 >> 8) & 0xFF);
+  uint8_t CRC32_byte0 = (uint8_t)(CRC32 & 0xFF);//LSB
 
 
 
+  /************************************************************************************************
+   Armado de Protocolo |TA|SA|PPID|PS|CRC16_1|CRC16_0|Payload[0]|CRC32_3|CRC32_2|CRC32_1|CRC32_0|
+   y envio por serial
+   Cabecera 1: 0x88 0x05 0x01 0x01 0xCC 0x7D 0x01 0x21 0x67 0xC4 0x81
+  ************************************************************************************************/
+  //Para la web:
+  //uint8_t cab[] = {TA,SA,PPID,PS,CRC16_1,CRC16_0,payload_envio[0],CRC32_byte3,CRC32_byte2,CRC32_byte1,CRC32_byte0};
+  //Para Enduro: LSB primero
+  uint8_t cab[] = {TA,SA,PPID,PS,CRC16_0,CRC16_1,payload_envio[0],CRC32_byte0,CRC32_byte1,CRC32_byte2,CRC32_byte3};
+
+  myprintf("Enviando comando ... \n");
+  //myprintf("%11X \n",cab);
+  //uint8_t cab[] = {CRC32_byte3,CRC32_byte2,CRC32_byte1,CRC32_byte0};
+  HAL_UART_Transmit(&huart2,cab,11,2500);// Sending in normal mode
+  HAL_UART_Transmit(&huart7,cab,11,2500);// Sending in normal mode
+  HAL_Delay(500);
 
   /* USER CODE END 2 */
 
@@ -762,7 +795,8 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 	  //user_loop_receiver();
-
+	  //HAL_UART_Transmit(&huart7,cab,11,2500);// Sending in normal mode
+	  //HAL_Delay(300);
 
 
 
@@ -941,7 +975,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 1200;
+  huart2.Init.BaudRate = 9600;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
