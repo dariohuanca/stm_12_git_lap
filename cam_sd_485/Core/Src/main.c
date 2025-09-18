@@ -153,6 +153,35 @@ void myprintf(const char *fmt, ...) {
 }
 
 
+void recibido(uint8_t cab6){
+  switch(cab6){
+   case 0x01:
+	//payload_total[0]=0x01; /*TomaFotoSD*/
+	break;
+   case 0x02:
+	//payload_total[0]=0x02; /*EnvíoFotoPaySTM32*/
+	break;
+   case 0x03:
+	//payload_total[0]=0x03; /*TomaFotoALmacYenviaPayload*/
+	break;
+   case 0x04:
+	myprintf("\r\n MicroSD inicializo BIEN \r\n\r\n");
+    break;
+   case 0x05:
+	myprintf("\r\n MicroSD inicializo MAL \r\n\r\n");
+	break;
+   case 0x06:
+	myprintf("\r\n Camara inicializo BIEN \r\n\r\n");
+	break;
+   case 0x07:
+	myprintf("\r\n Camara inicializo MAL \r\n\r\n");
+	break;
+   default:
+    myprintf("\r\n No entendi causha \r\n\r\n");
+  }
+
+}
+
 
 static uint32_t get_last_attempt(void)
 {
@@ -407,6 +436,7 @@ uint8_t SA; /*SA=SourceAddress (Address del OBC)*/
  Toma de foto camara 1: id=0x01
  Toma de foto camara 2: id=0x02)*/
 uint8_t PPID;
+uint8_t cab6;
 
 /*PS=PayloadSize (Tamaño del payload)
  PayloadComando= 1-2bytes
@@ -587,9 +617,187 @@ uint32_t gener_crc32 (uint8_t TA,uint8_t SA,uint8_t PPID,uint8_t PS,uint8_t CRC1
 }
 
 
+/****************************************
+ * Funciones generan CRC16 y CRC32 de comandos de recepcion
+ ***************************************/
+bool gener_crc16_rx(uint8_t *cabecera,uint8_t size_cabecera,uint8_t *cab){
+
+		    uint16_t G_X = 0x1021; // Polynomial generator
+		    uint16_t CRC16 = 0xFFFF;
+		    uint8_t InvArreglo[4] = {};
+		    uint8_t Temp;
+		    uint8_t InvBits[4] ={}; //Arreglo de bits invertidos de la cabecera  (LSB first)
+		    uint8_t Fin=0x00;
+
+		    //Se invierten los elementos del array
+		    for(int i=0; i<size_cabecera; i++){
+		    	InvArreglo[i]=cabecera[size_cabecera-i-1];
+		    }
+		    myprintf("%02X %02X %02X %02X\n",InvArreglo[0],InvArreglo[1],InvArreglo[2],InvArreglo[3]);
+
+		    //Se invierten los bits de los elementos del array
+		    for(int j=0; j<size_cabecera;j++){
+		    	for(int i=0; i<8; i++){
+		    		Temp=InvArreglo[j]&(0x80);
+		    		//InvBits[0]=InvArreglo[1];
+		    		//HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
+		    		//HAL_Delay(1000);
+		    		if(Temp!=0x00){
+		    			Fin=(Fin>>1);
+		    			Fin=Fin|(0x80);
+		    			InvArreglo[j]=(InvArreglo[j]<<1);
+		    			// InvBits[0]=Fin;
+		    			// HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
+		    			// HAL_Delay(1000);
+		    		}else{
+		    			Fin=(Fin>>1);
+		    			InvArreglo[j]=(InvArreglo[j]<<1);
+		    			//InvBits[0]=InvArreglo[0];
+		    			//HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
+		    			//HAL_Delay(1000);
+		    		}
+		    	}
+		    	InvBits[j]=Fin;
+		    	Fin=0x00;
+		    }
+		    myprintf("%02X %02X %02X %02X\n",InvBits[0],InvBits[1],InvBits[2],InvBits[3]);
+		    //Algoritmo para la generación del CRC16 de la cabecera invertida
+		    for(int i=0; i<sizeof(InvBits)/sizeof(InvBits[0]); i++){
+		    	  CRC16 ^= (uint16_t)(InvBits[i]<<8);
+
+		    	  for (int i=0; i<8; i++){
+		    		  if ((CRC16 & 0x8000) != 0){
+		    			  CRC16 = (uint16_t)((CRC16 <<1)^G_X);
+		    		  }else{
+		    			  CRC16 <<=1;
+		    		  }
+		    	  }
+		    }
+
+		    // El CRC16 de 0x8805 = 0xC294
+		    // El CRC16 de 0x88050101 = 0x901B
+		    // El CRC16 de 0x8080A011 (0x88050101 invertido) = 0x7DCC
+		    uint8_t CRC16_0 = (uint8_t)(CRC16 & 0x00FF);
+		    uint8_t CRC16_1 = (uint8_t)((CRC16 >> 8)& 0x00FF);
+
+		    myprintf("%02X %02X \n",CRC16_0,CRC16_1);
+		    myprintf("%02X %02X\n",cab[4],cab[5]);
+		    bool status_crc16;
+		    if(CRC16_0==cab[4] && CRC16_1==cab[5]){
+		  	  status_crc16= true;
+		  	  myprintf("El CRC16 se recibio correctamente ... \n");
+		  	  myprintf("%02X %02X\n",cab[4],cab[5]);
+		  	  return status_crc16;
+		    }else{
+		  	  status_crc16= false;
+		  	  myprintf("El CRC16 no esta correcto ... \n");
+		  	  myprintf("%02X %02X\n",cab[4],cab[5]);
+		  	  return status_crc16;
+		    }
+}
+
+bool gener_crc32_rx(uint8_t *payload_cabecera,uint8_t size_cabecera,uint8_t *cab){
+
+			//Algoritmo para la generación del CRC32 de la cabecera invertida
+		    uint32_t G_Y = 0x04C11DB7; // Polynomial generator
+		    uint32_t CRC32 = 0xFFFFFFFF;
+		    uint8_t InvArreglo2[7] = {};
+		    uint8_t Temp2;
+		    uint8_t Fin2=0x00;
+		    uint8_t InvBits2[7] ={};
+
+		    //Se invierten los elementos del array
+		    //Frame actual: 0x01 0xCC 0x7D 0x01 0x01 0x05 0x88
+		    for(int i=0; i<size_cabecera; i++){
+		    	InvArreglo2[i]=payload_cabecera[size_cabecera-i-1];
+		    }
+
+		    //Se invierten los bits de los elementos del array
+		    //Frame LBS: 0x80 0x33 0xBE 0x80 0x80 0xA0 0x11
+		    for(int j=0; j<size_cabecera;j++){
+		    	for(int i=0; i<8; i++){
+		    		Temp2=InvArreglo2[j]&(0x80);
+		    		//InvBits3[0]=InvArreglo2[j];
+		    		//HAL_UART_Transmit(&huart2,InvBits3,sizeof(InvBits3),100);// Sending in normal mode
+		    		//HAL_Delay(1000);
+		    		if(Temp2!=0x00){
+		    			Fin2=(Fin2>>1);
+		    			Fin2=Fin2|(0x80);
+		    			InvArreglo2[j]=(InvArreglo2[j]<<1);
+		    			//InvBits3[0]=Fin2;
+		    			//HAL_UART_Transmit(&huart2,InvBits3,sizeof(InvBits3),100);// Sending in normal mode
+		    			//HAL_Delay(1000);
+		    		}else{
+		    			Fin2=(Fin2>>1);
+		    			InvArreglo2[j]=(InvArreglo2[j]<<1);
+		    			//InvBits[0]=InvArreglo[0];
+		    			//HAL_UART_Transmit(&huart2,InvBits,sizeof(InvBits),100);// Sending in normal mode
+		    			//HAL_Delay(1000);
+		    		}
+		    	}
+		    	InvBits2[j]=Fin2;
+		    	Fin2=0x00;
+		    }
+
+		    for(int j=0; j<sizeof(InvBits2)/sizeof(InvBits2[0]); j++){
+		    	CRC32 ^= (uint32_t)(InvBits2[j]<<24);
+
+		    	  for (int j=0; j<8; j++){
+		    		  if ((CRC32 & 0x80000000) != 0){
+		    			  CRC32 = (uint32_t)((CRC32 <<1)^G_Y);
+		    		  }else{
+		    			  CRC32 <<=1;
+		    		  }
+		    	  }
+		    }
+
+		    uint8_t CRC32_byte3 = (uint8_t)((CRC32 >> 24) & 0xFF);//MSB
+		    uint8_t CRC32_byte2 = (uint8_t)((CRC32 >> 16) & 0xFF);
+		    uint8_t CRC32_byte1 = (uint8_t)((CRC32 >> 8) & 0xFF);
+		    uint8_t CRC32_byte0 = (uint8_t)(CRC32 & 0xFF);//LSB
+
+		    bool status_crc32;
+		    if(CRC32_byte0==cab[7] && CRC32_byte1==cab[8] && CRC32_byte2==cab[9] && CRC32_byte3==cab[10]){
+		  	  status_crc32= true;
+		  	  myprintf("El CRC32 se recibio correctamente ... \n");
+		  	  myprintf("%02X %02X %02X %02X\n",cab[7],cab[8],cab[9],cab[10]);
+		  	  return status_crc32;
+		    }else{
+		  	  status_crc32= false;
+		  	  myprintf("El CRC32 no esta correcto ... \n");
+		  	  myprintf("%02X %02X %02X %02X\n",cab[7],cab[8],cab[9],cab[10]);
+		  	  return status_crc32;
+		    }
+}
+
+
+/*Respuesta de comandos*/
+
+
+
 /*******************************************************************************************************************/
 
+/*
 
+uint8_t respuesta(const uint8_t *cab){
+
+	//myprintf("Comando Recibido \n");
+	//myprintf("%11X \n",cab);
+	//myprintf("Status %d \n",status);
+	uint8_t cabecera[4] = {cab[0],cab[1],cab[2],cab[3]};
+	uint8_t size_cabecera = sizeof(cabecera)/sizeof(cabecera[0]);
+
+	bool status_crc16= gener_crc16(cabecera,size_cabecera,cab);
+	//********************** Verificacion CRC32
+	uint8_t payload_cabecera[7] = {cab[0],cab[1],cab[2],cab[3],cab[5],cab[4],cab[6]};
+	uint8_t size_payload_cabe = sizeof(payload_cabecera)/sizeof(payload_cabecera[0]);
+	//myprintf("entrando al crc32 x1... \n");
+	bool status_crc32 = gener_crc32(payload_cabecera,size_payload_cabe,cab);
+	HAL_Delay(100);
+	return cab[6];
+}
+
+*/
 
 
 
@@ -711,6 +919,7 @@ int main(void)
   **************************/
   TA=0x88;
   SA=0x05;
+  // para el payload al reves
   PPID=0x01;
 
   /**********************************
@@ -722,10 +931,10 @@ int main(void)
   	payload_total[0]=0x01; /*TomaFotoSD*/
   	break;
    case 0x02:
-  	payload_total[0]=0x02; /*EnvíoFotoPaySTM32*/
+  	payload_total[0]=0x03; /*EnvíoFotoPaySTM32*/
     break;
    case 0x03:
-    payload_total[0]=0x03; /*TomaFotoALmacYenviaPayload*/
+    payload_total[0]=0x05; /*TomaFotoALmacYenviaPayload*/
     break;
    default:
     payload_total[0]=0xFF;
@@ -776,14 +985,28 @@ int main(void)
   //Para la web:
   //uint8_t cab[] = {TA,SA,PPID,PS,CRC16_1,CRC16_0,payload_envio[0],CRC32_byte3,CRC32_byte2,CRC32_byte1,CRC32_byte0};
   //Para Enduro: LSB primero
-  uint8_t cab[] = {TA,SA,PPID,PS,CRC16_0,CRC16_1,payload_envio[0],CRC32_byte0,CRC32_byte1,CRC32_byte2,CRC32_byte3};
+  uint8_t cabe[] = {TA,SA,PPID,PS,CRC16_0,CRC16_1,payload_envio[0],CRC32_byte0,CRC32_byte1,CRC32_byte2,CRC32_byte3};
 
   myprintf("Enviando comando ... \n");
   //myprintf("%11X \n",cab);
   //uint8_t cab[] = {CRC32_byte3,CRC32_byte2,CRC32_byte1,CRC32_byte0};
-  HAL_UART_Transmit(&huart2,cab,11,2500);// Sending in normal mode
-  HAL_UART_Transmit(&huart7,cab,11,2500);// Sending in normal mode
+  HAL_UART_Transmit(&huart2,cabe,11,2500);// Sending in normal mode
+  HAL_UART_Transmit(&huart7,cabe,11,2500);// Sending in normal mode
   HAL_Delay(500);
+
+  int a1 = 0;
+  uint8_t resp[]={};
+
+
+
+  //************************************* Recibiendo comando *************************************************************
+   //Armado de Protocolo |TA|SA|PPID|PS|CRC16_0|CRC16_1|Payload[0]|CRC32_0|CRC32_1|CRC32_2|CRC32_3|
+   //**********************************************************************************************************************
+   //HAL_Delay(2000);
+
+
+   // Reconocer el payload : lee foto desde la SD del payload y lo envia al OBC}
+
 
   /* USER CODE END 2 */
 
@@ -797,6 +1020,53 @@ int main(void)
 	  //user_loop_receiver();
 	  //HAL_UART_Transmit(&huart7,cab,11,2500);// Sending in normal mode
 	  //HAL_Delay(300);
+	  /*
+	  if (a1 == 0){
+		  HAL_StatusTypeDef status_rec = HAL_UART_Receive(&LINK_UART_HANDLE,cab,11,2500);
+		  if(status_rec==HAL_OK){
+			  cab6 = respuesta(cab);
+			  HAL_Delay(300);
+			  recibido
+		  }
+
+	  }
+	  */
+
+	   myprintf("Recibiendo comando ... \n");
+	   HAL_StatusTypeDef status_rec = HAL_UART_Receive(&LINK_UART_HANDLE,resp,11,2500);
+
+	   //Verificar si logro recibir el comando
+	   /*Estado comando*/
+	   int status;
+
+	   if(status_rec==HAL_OK){
+	 	  status=1;
+	   	  //myprintf("\r\n Comando Recibido \r\n");
+	   	  HAL_Delay(500);
+	   	  HAL_UART_Transmit(&huart2,resp,11,2500);
+	   	  HAL_Delay(500);
+	   	  //myprintf("Status %d \n",status);
+
+	      //****************** Verificacion CRC16*/
+	      uint8_t cabecera[4] = {resp[0],resp[1],resp[2],resp[3]};
+
+	      HAL_UART_Transmit(&huart2,cabecera,4,2500);
+
+	      uint8_t size_cabecera = sizeof(cabecera)/sizeof(cabecera[0]);
+
+	      bool status_crc16= gener_crc16_rx(cabecera,size_cabecera,resp);
+	      //********************** Verificacion CRC32*/
+	      uint8_t payload_cabecera[7] = {resp[0],resp[1],resp[2],resp[3],resp[5],resp[4],resp[6]};
+	      uint8_t size_payload_cabe = sizeof(payload_cabecera)/sizeof(payload_cabecera[0]);
+
+	      bool status_crc32 = gener_crc32_rx(payload_cabecera,size_payload_cabe,resp);
+
+	   }else{
+	   	  status=0;
+	   	  myprintf("Status %d \n",status);
+	   	  myprintf("Comando no recibido\n");
+	   }
+
 
 
 
