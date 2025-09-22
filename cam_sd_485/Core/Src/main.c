@@ -182,6 +182,16 @@ void recibido(uint8_t cab6){
 
 }
 
+static inline void uart_flush_rx_polling(UART_HandleTypeDef *huart)
+{
+    uint8_t dump;
+    while (HAL_UART_Receive(huart, &dump, 1, 0) == HAL_OK) {
+        /* discard */
+    }
+    /* If an overrun happened, clear it so RX keeps working */
+    __HAL_UART_CLEAR_OREFLAG(huart);
+}
+
 
 static uint32_t get_last_attempt(void)
 {
@@ -234,7 +244,7 @@ static int uart_send(const void *p, uint16_t n)
 }
 static bool uart_try_read(uint8_t *ch)  // non-blocking single byte
 {
-    return (HAL_UART_Receive(&LINK_UART_HANDLE, ch, 1, 0) == HAL_OK);
+    return (HAL_UART_Receive(&LINK_UART_HANDLE, ch, 1, UART_TMO_MS) == HAL_OK);
 }
 
 /* ===== ACK/NAK helper ===== */
@@ -1142,6 +1152,7 @@ int main(void)
 	  uint8_t comando = recibir_comando();
 	  comando_recibido(comando);
 	  enviar_comando(0x02);
+	  uart_flush_rx_polling(&LINK_UART_HANDLE);
 	  user_loop_receiver_while();
 	  uint8_t comando2 = recibir_comando();
 	  comando_recibido(comando2);
