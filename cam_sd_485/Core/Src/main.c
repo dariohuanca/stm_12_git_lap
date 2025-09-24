@@ -334,7 +334,7 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
     static uint8_t buf[CHUNK];
 
 
-    //MX_FATFS_Init();
+    MX_FATFS_Init();
     fr = f_mount(&fs, "", 1); if (fr != FR_OK){myprintf("Estoy aqui \r\n"); return -100;}
 
     fr = f_open(&f, save_path, FA_WRITE | FA_CREATE_ALWAYS);
@@ -356,8 +356,8 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
         //send_ack(seq, ACK);
 
         int r = recv_frame(&seq, buf, &len);
-        myprintf("R = %d \r\n", r);
-        HAL_Delay(500);
+        //myprintf("R = %d \r\n", r);
+        HAL_Delay(150);
         if (r == 0 && seq == expect_seq) {
         	//myprintf("Recibio x3 \r\n");
             fr = f_write(&f, buf, len, &bw);
@@ -430,6 +430,7 @@ void user_loop_receiver_while(void)
 	while (a==1) {
         if (detect_header_nonblocking(&pending_size)) {
             receiving = true;
+            char filename[40];
             myprintf("Recibio encabezado \r\n");
             myprintf("expected_size = %lu bytes\r\n", (unsigned long)pending_size);
             //HAL_Delay(500);
@@ -1303,7 +1304,7 @@ static void MX_UART7_Init(void)
 
   /* USER CODE END UART7_Init 1 */
   huart7.Instance = UART7;
-  huart7.Init.BaudRate = 2400;
+  huart7.Init.BaudRate = 9600;
   huart7.Init.WordLength = UART_WORDLENGTH_8B;
   huart7.Init.StopBits = UART_STOPBITS_1;
   huart7.Init.Parity = UART_PARITY_NONE;
