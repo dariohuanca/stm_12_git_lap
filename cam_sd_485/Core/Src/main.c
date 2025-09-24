@@ -335,10 +335,10 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
 
 
     //MX_FATFS_Init();
-    //fr = f_mount(&fs, "", 1); if (fr != FR_OK) return -100;
+    fr = f_mount(&fs, "", 1); if (fr != FR_OK){myprintf("Estoy aqui \r\n"); return -100;}
 
     fr = f_open(&f, save_path, FA_WRITE | FA_CREATE_ALWAYS);
-    if (fr != FR_OK) { f_mount(NULL, "", 0); return -101; }
+    if (fr != FR_OK) { f_mount(NULL, "", 0);myprintf("Estoy aqui x2 \r\n"); return -101; }
 
     uint32_t received = 0;
     uint16_t expect_seq = 0;
@@ -436,7 +436,8 @@ void user_loop_receiver_while(void)
             (void)generar_nombre_unico(filename, sizeof(filename));
             (void)receive_frames_after_header(filename, pending_size); // blocks until done
             receiving = false;
-            a==0;
+            a=0;
+            break;
         }
         myprintf("no pasa nada\r\n");
 
@@ -666,7 +667,7 @@ bool gener_crc16_rx(uint8_t *cabecera,uint8_t size_cabecera,uint8_t *cab){
 		    for(int i=0; i<size_cabecera; i++){
 		    	InvArreglo[i]=cabecera[size_cabecera-i-1];
 		    }
-		    myprintf("%02X %02X %02X %02X\n",InvArreglo[0],InvArreglo[1],InvArreglo[2],InvArreglo[3]);
+		    //myprintf("%02X %02X %02X %02X\n",InvArreglo[0],InvArreglo[1],InvArreglo[2],InvArreglo[3]);
 
 		    //Se invierten los bits de los elementos del array
 		    for(int j=0; j<size_cabecera;j++){
@@ -693,7 +694,7 @@ bool gener_crc16_rx(uint8_t *cabecera,uint8_t size_cabecera,uint8_t *cab){
 		    	InvBits[j]=Fin;
 		    	Fin=0x00;
 		    }
-		    myprintf("%02X %02X %02X %02X\n",InvBits[0],InvBits[1],InvBits[2],InvBits[3]);
+		    //myprintf("%02X %02X %02X %02X\n",InvBits[0],InvBits[1],InvBits[2],InvBits[3]);
 		    //Algoritmo para la generación del CRC16 de la cabecera invertida
 		    for(int i=0; i<sizeof(InvBits)/sizeof(InvBits[0]); i++){
 		    	  CRC16 ^= (uint16_t)(InvBits[i]<<8);
@@ -713,8 +714,8 @@ bool gener_crc16_rx(uint8_t *cabecera,uint8_t size_cabecera,uint8_t *cab){
 		    uint8_t CRC16_0 = (uint8_t)(CRC16 & 0x00FF);
 		    uint8_t CRC16_1 = (uint8_t)((CRC16 >> 8)& 0x00FF);
 
-		    myprintf("%02X %02X \n",CRC16_0,CRC16_1);
-		    myprintf("%02X %02X\n",cab[4],cab[5]);
+		    //myprintf("%02X %02X \n",CRC16_0,CRC16_1);
+		    //myprintf("%02X %02X\n",cab[4],cab[5]);
 		    bool status_crc16;
 		    if(CRC16_0==cab[4] && CRC16_1==cab[5]){
 		  	  status_crc16= true;
@@ -847,7 +848,11 @@ uint8_t recibir_comando(void){
 
 		    myprintf("Esperando comando ... \n");
 		    HAL_StatusTypeDef status_rec = HAL_UART_Receive(&LINK_UART_HANDLE,cab,11,2500);
+		    myprintf("%02X %02X %02X %02X \n",cab[0],cab[1],cab[2],cab[3]);
+		    myprintf("%02X %02X %02X %02X \n",cab[4],cab[5],cab[6],cab[7]);
+		    myprintf("%02X %02X %02X  \n",cab[8],cab[9],cab[10]);
 
+		    myprintf("%02X ..\n",cab[6]);
 		    //Verificar si logro recibir el comando
 
 		    //int status;
@@ -855,7 +860,7 @@ uint8_t recibir_comando(void){
 		    if(status_rec==HAL_OK){
 		    	//status=1;
 		    	myprintf("Comando Recibido \n");
-		    	HAL_UART_Transmit(&LINK_UART_HANDLE,cab,11,2500);
+		    	//HAL_UART_Transmit(&LINK_UART_HANDLE,cab,11,2500);
 		    	//myprintf("%11X \n",cab);
 		    	//myprintf("Status %d \n",status);
 			    uint8_t cabecera[4] = {cab[0],cab[1],cab[2],cab[3]};
@@ -909,15 +914,13 @@ void comando_recibido(uint8_t cab6){
 	   //enviar_comando(0XFF);
 	   break;
    case 0x03:
-	//payload_total[0]=0x03; /*TomaFotoALmacYenviaPayload*/
-	   //enviar_comando(0XFF);
-	   //envia_defrente();
+	   myprintf("SD BIEN / CAMARA MAL \n");
 	   break;
-   case 0x04:
-	//myprintf("\r\n MicroSD inicializo BIEN \r\n\r\n");
+   case 0x08:
+	   myprintf("SD BIEN / CAMARA BIEN \n");
 	   break;
    case 0x05:
-	//myprintf("\r\n MicroSD inicializo MAL \r\n\r\n");
+	   myprintf("SD MAL / CAMARA BIEN \n");
 	   break;
    case 0x06:
 	//myprintf("\r\n Camara inicializo BIEN \r\n\r\n");
@@ -945,6 +948,7 @@ void enviar_comando(uint8_t indicador){
 	//payload_total[0] = comando_enviado(PPID); //Halla el payload_total con respecto al PPID
 	PPID=indicador;
 	payload_total[0] = indicador;
+	//uint8_t resp[11]={};
 
 	for (int i=0; i<255; i++){
 	  val = payload_total[i] & 0b11111111;
@@ -956,9 +960,9 @@ void enviar_comando(uint8_t indicador){
 	//payload_envio[0] = payload_total[0];
 
     //PS = countPay(payload_envio);
-	PS = count;
+	//PS = count;
 	payload_envio[0] = payload_total[0];
-
+	PS = 0x01;
 
 
     /******************************
@@ -976,16 +980,19 @@ void enviar_comando(uint8_t indicador){
     uint8_t CRC32_byte1 = (uint8_t)((CRC32 >> 8) & 0xFF);
     uint8_t CRC32_byte0 = (uint8_t)(CRC32 & 0xFF);//LSB
 
-    uint8_t resp[] = {TA,SA,PPID,PS,CRC16_0,CRC16_1,payload_envio[0],CRC32_byte0,CRC32_byte1,CRC32_byte2,CRC32_byte3};
-
-
-    HAL_Delay(5000);
+    uint8_t resp[11] = {TA,SA,PPID,PS,CRC16_0,CRC16_1,payload_envio[0],CRC32_byte0,CRC32_byte1,CRC32_byte2,CRC32_byte3};
+    //myprintf("%02X %02X %02X %02X 02X %02X %02X %02X 02X %02X %02X \n",resp[0],resp[1],resp[2],resp[3],resp[4],resp[5],resp[6],resp[7],resp[8],resp[9],resp[10]);
+    myprintf("%02X %02X %02X %02X \n",resp[0],resp[1],resp[2],resp[3]);
+    myprintf("%02X %02X %02X %02X \n",resp[4],resp[5],resp[6],resp[7]);
+    myprintf("%02X %02X %02X  \n",resp[8],resp[9],resp[10]);
+    HAL_Delay(500);
 	//myprintf("Enviando comando ... \n");
 	//HAL_UART_Transmit(&huart4,resp,11,2500);
 	//myprintf("%X \n",resp);
 	//uint8_t cab[] = {CRC32_byte3,CRC32_byte2,CRC32_byte1,CRC32_byte0};
 	HAL_StatusTypeDef status_rec = HAL_UART_Transmit(&LINK_UART_HANDLE,resp,11,2500);// Sending in normal mode
 	HAL_Delay(500);
+	count = 0;
 
 
 	//myprintf("\r\n  \r\n\r\n");
@@ -1146,7 +1153,13 @@ int main(void)
 
 	  }
 	  */
+
 	  HAL_Delay(1000);
+
+	  uint8_t comando3 = recibir_comando();
+	  comando_recibido(comando3);
+
+	  HAL_Delay(2000);
 	  enviar_comando(0x01);
 
 	  uint8_t comando = recibir_comando();
