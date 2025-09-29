@@ -104,6 +104,11 @@ static void fecha_yyyymmdd(char *dst) { strcpy(dst, "20250101"); }
 static int generar_nombre_unico(char *out, size_t out_sz) {
     if (!out || out_sz < 32) return -1;
     char ymd[9]; fecha_yyyymmdd(ymd);
+    FATFS fs; FIL file; FRESULT fr; UINT bw;
+    //myprintf("inicializacion\r\n");
+    MX_FATFS_Init();
+    fr = f_mount(&fs, "", 1);
+    if (fr != FR_OK) { return -100; }
     FILINFO fno;
     for (unsigned i = 0; i < 1000000U; i++) {
         int n = snprintf(out, out_sz, "IMG_%s_%06u.JPG", ymd, i);
