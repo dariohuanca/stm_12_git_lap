@@ -255,7 +255,9 @@ static bool uart_try_read(uint8_t *ch)  // non-blocking single byte
 /* ===== ACK/NAK helper ===== */
 static int send_ack(uint16_t seq, uint8_t code)
 {
-    uint8_t a[3] = { code, (uint8_t)seq, (uint8_t)(seq >> 8) };
+
+	uint8_t a[3] = { code, (uint8_t)seq, (uint8_t)(seq >> 8) };
+	HAL_UART_Transmit(&huart3, a, 3, HAL_MAX_DELAY);
     return uart_send(a, 3);
 }
 
@@ -286,6 +288,7 @@ static bool detect_header_nonblocking(uint32_t *out_size)
                 uint8_t ack = ACK; // tell sender we're ready
                 //int e = uart_send(&ack, 1);
                 int e = HAL_UART_Transmit(&LINK_UART_HANDLE, &ack, 1, HAL_MAX_DELAY);
+                HAL_UART_Transmit(&huart3, &ack, 1, HAL_MAX_DELAY);
                 state = 0;
                 myprintf("envio fue = %d \r\n", e);
                 //myprintf("El envio fue 0x%02X\r\n", (unsigned)e);
@@ -374,6 +377,7 @@ int receive_frames_after_header(const char *save_path, uint32_t expected_size)
             }
             received += len;
             send_ack(seq, ACK);
+
             expect_seq++;
         }
         /*
